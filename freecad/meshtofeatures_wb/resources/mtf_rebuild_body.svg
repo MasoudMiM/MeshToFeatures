@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- mesh triangles (left) -->
+  <g stroke="#607d8b" stroke-width="2" fill="none">
+    <path d="M5 46 L16 22 L27 42 Z"/>
+    <path d="M16 22 L27 42 L31 16"/>
+  </g>
+  <!-- arrow -->
+  <path d="M28 32 h9 l-4 -4 m4 4 l-4 4" stroke="#455a64" stroke-width="2.5" fill="none"/>
+  <!-- editable PartDesign BODY: filled isometric solid -->
+  <g stroke="#bf360c" stroke-width="2" stroke-linejoin="round">
+    <path d="M41 24 L53 18 L61 24 L61 42 L49 48 L41 42 Z" fill="#ffb74d"/>
+    <path d="M41 24 L49 30 L49 48" fill="none"/>
+    <path d="M49 30 L61 24" fill="none"/>
+  </g>
+</svg>

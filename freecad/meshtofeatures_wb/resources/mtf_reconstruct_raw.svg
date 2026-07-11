@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- mesh triangles (left) -->
+  <g stroke="#607d8b" stroke-width="2" fill="none">
+    <path d="M5 46 L16 22 L27 42 Z"/>
+    <path d="M16 22 L27 42 L31 16"/>
+  </g>
+  <!-- arrow -->
+  <path d="M28 32 h9 l-4 -4 m4 4 l-4 4" stroke="#455a64" stroke-width="2.5" fill="none"/>
+  <!-- fitted cylinder (as measured) -->
+  <g stroke="#e65100" stroke-width="2.5" fill="none">
+    <ellipse cx="50" cy="16" rx="8" ry="3.5"/>
+    <path d="M42 16 v22 a8 3.5 0 0 0 16 0 v-22"/>
+  </g>
+  <!-- raw badge: approx (as-measured, no snapping) -->
+  <circle cx="55" cy="52" r="8" fill="#607d8b"/>
+  <path d="M50 50 q2.5 -2.5 5 0 t5 0 M50 55 q2.5 -2.5 5 0 t5 0"
+        stroke="#ffffff" stroke-width="2" fill="none"/>
+</svg>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>MeshToFeatures</name>
+  <description>Reverse-engineer triangle meshes (STL) of prismatic parts into editable PartDesign bodies: surface recognition, design-intent parameter snapping, feature detection, and build-history reconstruction. Beta.</description>
+  <version>0.16.0</version>
+  <date>2026-07-11</date>
+  <license file="LICENSE">LGPL-2.1-or-later</license>
+  <maintainer email="fem.studio@pm.me">Masoud MiM</maintainer>
+  <url type="repository" branch="main">https://github.com/MasoudMiM/MeshToFeatures</url>
+  <content>
+    <workbench>
+      <classname>MeshToFeaturesWorkbench</classname>
+      <subdirectory>./</subdirectory>
+      <tag>mesh</tag>
+      <tag>reverse engineering</tag>
+      <tag>reconstruction</tag>
+    </workbench>
+  </content>
+</package>

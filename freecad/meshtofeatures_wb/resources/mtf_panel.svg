@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- task panel window -->
+  <rect x="6" y="8" width="52" height="48" rx="4" fill="none"
+        stroke="#455a64" stroke-width="2.5"/>
+  <path d="M6 18 h52" stroke="#455a64" stroke-width="2.5"/>
+  <circle cx="12" cy="13" r="1.8" fill="#455a64"/>
+  <circle cx="18" cy="13" r="1.8" fill="#455a64"/>
+  <!-- mesh motif inside -->
+  <g stroke="#607d8b" stroke-width="2" fill="none">
+    <path d="M12 46 L20 30 L28 44 Z"/>
+  </g>
+  <!-- option sliders -->
+  <g stroke="#e65100" stroke-width="2.5" fill="none">
+    <path d="M34 30 h18"/>
+    <path d="M34 40 h18"/>
+    <path d="M34 50 h18"/>
+  </g>
+  <circle cx="46" cy="30" r="3.2" fill="#e65100"/>
+  <circle cx="38" cy="40" r="3.2" fill="#e65100"/>
+  <circle cx="50" cy="50" r="3.2" fill="#e65100"/>
+</svg>

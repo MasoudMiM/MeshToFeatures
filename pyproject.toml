@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshtofeatures"
+version = "0.16.0"
+description = "Reverse-engineer analytic surfaces from triangle meshes (geometry core of a FreeCAD reverse-engineering addon)"
+license = "LGPL-2.1-or-later"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10", "trimesh>=4.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "manifold3d>=2.0", "shapely>=2.0", "mapbox-earcut>=1.0", "rtree>=1.0"]
+
+[tool.setuptools.packages.find]
+include = ["meshtofeatures*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

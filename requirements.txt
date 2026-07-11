@@ -1,0 +1,4 @@
+numpy>=1.24
+scipy>=1.10
+trimesh>=4.0
+shapely>=2.0
