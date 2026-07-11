@@ -5,11 +5,20 @@
   <version>0.16.0</version>
   <date>2026-07-11</date>
   <license file="LICENSE">LGPL-2.1-or-later</license>
-  <maintainer email="fem.studio@pm.me">Masoud MiM</maintainer>
+  <maintainer email="fem.studio@pm.me">Masoud Masoumi</maintainer>
+  <icon>freecad/meshtofeatures_wb/resources/meshtofeatures.svg</icon>
   <url type="repository" branch="main">https://github.com/MasoudMiM/MeshToFeatures</url>
+  <url type="readme">https://github.com/MasoudMiM/MeshToFeatures/blob/main/README.md</url>
+  <url type="bugtracker">https://github.com/MasoudMiM/MeshToFeatures/issues</url>
+  <freecadmin>1.0</freecadmin>
+  <depend type="python">numpy</depend>
+  <depend type="python">scipy</depend>
+  <depend type="python">trimesh</depend>
+  <depend type="python">shapely</depend>
   <content>
     <workbench>
       <classname>MeshToFeaturesWorkbench</classname>
+      <icon>freecad/meshtofeatures_wb/resources/meshtofeatures.svg</icon>
       <subdirectory>./</subdirectory>
       <tag>mesh</tag>
       <tag>reverse engineering</tag>
