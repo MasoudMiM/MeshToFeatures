@@ -34,12 +34,16 @@ Recognized and rebuilt on the current beta:
   (detected and labeled, e.g. "8x counterbored hole, grid 4x2").
 - **Counterbored holes**, including bores whose mouth opens *below* the
   part's top face (e.g. on a plate under a raised deck).
-- **Cross-axis holes** (horizontal through-holes).
+- **Countersunk holes**: the conical entry of a flat-head-screw hole is
+  rebuilt as a `PartDesign::Hole` countersink (mouth diameter + included
+  angle), through or blind, on the top or bottom face.
+- **Cross-axis holes** (horizontal holes), both through and blind (a
+  blind side hole is rebuilt as a depth-limited pocket).
 - **Vertical bosses** and **lateral pads** — flanges, rails, and gusseted
   or beveled wedges protruding sideways off a wall, with slanted
   undersides reproduced at true slope.
-- **Fillet detection** with partial rebuild support; **chamfer
-  detection** (reported, not yet rebuilt — see limitations).
+- **Fillet detection** with partial rebuild support, and **chamfer
+  detection and rebuild** as `PartDesign::Chamfer`.
 - **Robust executor**: FreeCAD/OCC boolean failures on individual
   features are retried, deferred to the end of the build, and — only if
   unrecoverable — skipped with a loud, named report instead of silently
@@ -51,12 +55,11 @@ Recognized and rebuilt on the current beta:
 ## Limitations (please read before filing bugs)
 
 - **Prismatic parts only.** The reconstruction targets parts made of
-  planes and cylinders (plates, brackets, housings, fixtures). Organic /
-  sculpted / scanned shapes will not reconstruct meaningfully. Spheres,
-  cones, and tori are fitted by the core but not yet rebuilt as features.
-- **Chamfers and some blends are not rebuilt.** They are detected and
-  listed as "surfaces belonging to no recognized feature"; the rebuilt
-  body has sharp edges there.
+  planes and cylinders (plates, brackets, housings, fixtures), plus
+  conical countersinks. Organic / sculpted / scanned shapes will not
+  reconstruct meaningfully. Spheres and tori are fitted by the core but
+  not yet rebuilt as features; cones are rebuilt only as countersinks
+  (standalone conical faces are not yet a feature).
 - **Dimensional fidelity is bounded by the mesh.** Snapping tolerance is
   ~0.1% of the part diagonal; a coarse tessellation limits what can be
   recovered. Some internal recess boundaries are intentionally oversized

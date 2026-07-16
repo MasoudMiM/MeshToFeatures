@@ -75,6 +75,40 @@ def sample_cone(n=400, noise=0.0):
     return pts, normals, Cone(apex=apex, axis=axis, half_angle=alpha)
 
 
+def sample_cone_frustum(alpha_deg=45.0, r_small=2.5, r_big=5.0, sections=64,
+                        apex=(0.3, -0.4, 0.6), axis=(0.1, 0.2, 1.0),
+                        noise=0.0, concave=False):
+    """A cone frustum sampled as TWO vertex rings -- exactly the vertex
+    pattern a tessellated countersink produces. Two rings lie on a common
+    sphere (the classic impostor of design note 1), and the frustum spans
+    only a short axial band, so the nonlinear cone fit's half-angle
+    parameter can wander far along the periodic residual valley. A robust
+    fitter must still recover the true half-angle.
+
+    ``concave=True`` flips the surface normals to point toward the axis, as
+    a conical HOLE (countersink) does: then n . axis = +sin(alpha), the
+    opposite sign from a convex cone. The fitter must handle both."""
+    apex = np.asarray(apex, dtype=float)
+    axis = np.asarray(axis, dtype=float); axis /= np.linalg.norm(axis)
+    alpha = np.deg2rad(alpha_deg)
+    u = np.cross(axis, [1.0, 0.0, 0.0]); u /= np.linalg.norm(u)
+    v = np.cross(axis, u)
+    theta = np.linspace(0.0, 2 * np.pi, sections, endpoint=False)
+    ring = np.cos(theta)[:, None] * u + np.sin(theta)[:, None] * v
+    t = np.tan(alpha)
+    sign = -1.0 if concave else 1.0
+    pts, normals = [], []
+    for r in (r_small, r_big):
+        h = r / t
+        pts.append(apex + h * axis + r * ring)
+        normals.append(sign * (ring * np.cos(alpha) - axis * np.sin(alpha)))
+    pts = np.vstack(pts)
+    normals = np.vstack(normals)
+    if noise:
+        pts = pts + noise * RNG.normal(size=pts.shape)
+    return pts, normals, Cone(apex=apex, axis=axis, half_angle=alpha)
+
+
 def assert_same_direction(a, b, atol=1e-6):
     assert np.isclose(abs(np.dot(a, b)), 1.0, atol=atol), f"{a} vs {b}"
 
@@ -169,6 +203,65 @@ class TestFitCone:
         assert np.isclose(fit.primitive.half_angle, truth.half_angle, atol=5e-3)
         assert np.allclose(fit.primitive.apex, truth.apex, atol=0.05)
 
+    @pytest.mark.parametrize("alpha_deg", [20.0, 30.0, 41.0, 45.0, 50.0, 60.0])
+    def test_frustum_two_rings_recovers_half_angle(self, alpha_deg):
+        # a short two-ring frustum (a real tessellated countersink) must not
+        # let the half-angle wander to a wrapped/degenerate value
+        pts, normals, truth = sample_cone_frustum(alpha_deg=alpha_deg)
+        fit = fit_cone(pts, normals)
+        assert isinstance(fit.primitive, Cone)
+        assert np.isclose(fit.primitive.half_angle, truth.half_angle, atol=1e-4)
+        # axis points apex -> opening
+        assert np.dot(fit.primitive.axis, truth.axis) > 0.9999
+        # the surface itself is recovered (distance to true-cone samples ~ 0)
+        assert fit.rms < 1e-6
+
+    def test_frustum_noisy(self):
+        pts, normals, truth = sample_cone_frustum(alpha_deg=41.0, noise=0.003)
+        fit = fit_cone(pts, normals)
+        assert np.isclose(fit.primitive.half_angle, truth.half_angle, atol=5e-3)
+
+    @pytest.mark.parametrize("alpha_deg", [30.0, 45.0, 60.0])
+    def test_concave_cone_recovered(self, alpha_deg):
+        # a conical HOLE: normals point toward the axis (n . axis = +sin a),
+        # the opposite sign from a convex cone. The init must not assume a
+        # sign; recovery must still give the true half-angle and an axis
+        # pointing apex -> opening.
+        pts, normals, truth = sample_cone_frustum(alpha_deg=alpha_deg,
+                                                  concave=True)
+        fit = fit_cone(pts, normals)
+        assert np.isclose(fit.primitive.half_angle, truth.half_angle,
+                          atol=1e-4)
+        assert np.dot(fit.primitive.axis, truth.axis) > 0.9999
+        assert fit.rms < 1e-6
+
+    @pytest.mark.parametrize("half_angle_deg", [30.0, 41.0, 45.0, 60.0])
+    def test_real_countersink_mesh_recognizes_cone(self, half_angle_deg):
+        # end-to-end regression pin: a tessellated countersunk hole segments
+        # into a short two-ring cone whose averaged normals send the raw
+        # nonlinear fit's half-angle wandering. Before the geometry-based
+        # recovery the conical wall was mis-selected as a Sphere (its two
+        # rings lie on a common sphere); it must be a Cone now.
+        pytest.importorskip("trimesh")
+        import trimesh
+        from meshtofeatures.pipeline import reconstruct
+        plate = trimesh.creation.box(extents=[40.0, 30.0, 10.0])
+        drill = trimesh.creation.cylinder(radius=2.5, height=30.0, sections=64)
+        ha = np.deg2rad(half_angle_deg)
+        h_wide = 5.0 / np.tan(ha)
+        cone = trimesh.creation.cone(radius=5.0, height=h_wide, sections=64)
+        cone.apply_transform(
+            trimesh.transformations.rotation_matrix(np.pi, [1, 0, 0]))
+        cone.apply_translation([0, 0, 5.0])          # wide rim at top face
+        mesh = plate.difference(drill.union(cone))
+        rep = reconstruct(mesh)
+        kinds = [s.fit.primitive.kind for s in rep.surfaces]
+        assert "cone" in kinds, f"no cone recognized; got {kinds}"
+        cones = [s.fit.primitive for s in rep.surfaces
+                 if s.fit.primitive.kind == "cone"]
+        assert any(np.isclose(c.half_angle, ha, atol=np.deg2rad(1.5))
+                   for c in cones)
+
 
 # ---------------------------------------------------------------- selection
 
@@ -188,6 +281,22 @@ class TestFitBest:
     def test_cone_wins_on_cone(self):
         pts, normals, _ = sample_cone()
         assert fit_best(pts, normals).primitive.kind == "cone"
+
+    def test_cone_wins_on_two_ring_frustum(self):
+        # the two rings lie on a common sphere (design note 1); dense
+        # samples on the true surface must still select the cone
+        pts, normals, truth = sample_cone_frustum(alpha_deg=45.0)
+        # score on dense surface samples between the rings (expose the sphere)
+        u = np.cross(truth.axis, [1.0, 0.0, 0.0]); u /= np.linalg.norm(u)
+        v = np.cross(truth.axis, u)
+        th = RNG.uniform(0, 2 * np.pi, 500)
+        r = RNG.uniform(2.5, 5.0, 500)
+        h = r / np.tan(truth.half_angle)
+        samples = (truth.apex + h[:, None] * truth.axis
+                   + r[:, None] * (np.cos(th)[:, None] * u
+                                   + np.sin(th)[:, None] * v))
+        assert fit_best(pts, normals,
+                        score_points=samples).primitive.kind == "cone"
 
     def test_plane_preferred_over_giant_sphere(self):
         # noisy plane: a huge sphere fits noisy planar data almost as well;

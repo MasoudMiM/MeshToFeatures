@@ -481,6 +481,57 @@ v0.15.6 (lateral pads):
     `scripts/probe_bore_placement.py`, which builds the body and checks each
     bore site).
 
+44. **Cone fitting: recover the half-angle from geometry, not the
+    parameter** (unreleased). A tessellated countersink segments into a short
+    TWO-RING cone frustum, and two rings lie on a common sphere (note 1's
+    impostor), so the sphere wins on vertices unless the cone also fits.
+    Two bugs stopped it. (a) The nonlinear residual `radial·cos α − h·sin α`
+    is PERIODIC in α, so `least_squares` reaches a geometrically-perfect fit
+    (cost ~1e-13) whose α has wrapped to ~1e6°, which the `(0, π/2)` guard
+    then rejects — the surface is right, only the parameter escaped. Fix:
+    after convergence, recover α from the CONVERGED GEOMETRY as the slope of
+    `radial` vs axial height through the apex (`α = atan2(radial·h, h·h)`),
+    ignoring the raw parameter. (b) The normal-based init assumed a CONVEX
+    cone (`n·axis = −sin α < 0`) and force-flipped the axis; a CONCAVE
+    countersink has `n·axis = +sin α > 0`, so the flip sent the optimizer to
+    a degenerate α≈0. Fix: take `α0 = arcsin(|n·axis|)` and orient the axis
+    from the point cloud (apex→centroid), which is correct for both. Bounded
+    `trf` optimization was tried and rejected — it collapses to α≈0. Both
+    fixes are local to `fit_cone`; convex-cone recovery is unchanged to
+    machine precision.
+
+45. **Countersinks are a cone claiming a coaxial drill** (unreleased). A
+    countersunk hole = a concave full-revolution CONE (the entry) coaxial
+    with a drilled CYLINDER, the cone's narrow-end radius matching the drill
+    and its wide rim opening at a face. Detected BEFORE the plain-hole pass
+    (so the drill is described as countersunk, not a bare hole with an
+    orphan cone), then the drill is removed from the concave-cylinder list so
+    no coaxial stack re-claims it. Emitted as a `kind="hole"` feature with
+    `countersink_diameter` + `countersink_angle` (included) and a `mouth`
+    point; drill at `surface_indices[0]` keeps `_side`/`_surface_z`
+    compatible. Through-ness is judged on the COMPOSITE (drill far-opening +
+    cone near-opening), not the drill alone — the drill of a through
+    countersink sees only ONE plane opening because the cone caps its top.
+    Placement uses the mouth, not the drill span: the drill never reaches the
+    mouth face (the cone occupies that band), so `_side`/`_surface_z`
+    special-case countersinks to the `mouth`. Rebuilt natively by
+    `PartDesign::Hole` (`HoleCutType = Countersink`); the pocket fallback
+    does not reproduce the cone (documented degradation for below-top bores).
+
+46. **Blind cross-axis holes are depth-limited cross-hole pockets**
+    (unreleased). Detection was already axis-agnostic (a blind side hole is a
+    horizontal `kind="hole"`, `through=False`); the gap was the planner,
+    whose cross-hole branch fired only for `through=True`, dropping blind
+    side holes to `unplanned`. `CrossHoleOp` gained `through`, `depth`, and
+    `entry_direction`: a blind one carries the ENTRY point on the wall (the
+    axis line pierced through the opening plane), the inward direction
+    (toward the floor plane, or opposite the wall's outward normal), and the
+    drilled depth. The executor cuts it as a one-sided `Length` pocket
+    sketched on the entry wall with the OUTWARD normal (so the default
+    into-material cut drills inward); through holes keep the symmetric
+    midplane pocket. The manifold gate cuts a matching depth-limited bore
+    from each entry point.
+
 ## Run tests
 
 ```

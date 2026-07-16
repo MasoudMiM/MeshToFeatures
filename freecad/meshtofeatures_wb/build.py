@@ -424,16 +424,22 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
 
     doc.recompute()
 
-    # ---- cross-axis through holes: midplane through-all pockets -----------
+    # ---- cross-axis holes: through = midplane pocket, blind = Length -------
     import numpy as np
     for k, ch in enumerate(getattr(plan, "cross_holes", [])):
         axis = np.asarray(ch.axis, dtype=float)
-        u, v = _axis_frame(axis)
+        blind = not getattr(ch, "through", True)
+        # blind holes sketch on the ENTRY wall with the OUTWARD normal, so a
+        # normal (into-material) Length pocket drills inward by the depth;
+        # through holes sketch on a midplane normal to the axis.
+        sn = (-np.asarray(ch.entry_direction, dtype=float)
+              if blind else axis)
+        u, v = _axis_frame(sn)
         anchor0 = np.asarray(ch.positions3d[0], dtype=float)
         m = App.Matrix(
-            float(u[0]), float(v[0]), float(axis[0]), float(anchor0[0]),
-            float(u[1]), float(v[1]), float(axis[1]), float(anchor0[1]),
-            float(u[2]), float(v[2]), float(axis[2]), float(anchor0[2]),
+            float(u[0]), float(v[0]), float(sn[0]), float(anchor0[0]),
+            float(u[1]), float(v[1]), float(sn[1]), float(anchor0[1]),
+            float(u[2]), float(v[2]), float(sn[2]), float(anchor0[2]),
             0.0, 0.0, 0.0, 1.0)
         s = doc.addObject("Sketcher::SketchObject", f"CrossHoleProfile{k}")
         body.addObject(s)
@@ -449,42 +455,49 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         op = doc.addObject("PartDesign::Pocket", f"CrossHole{k}")
         body.addObject(op)
         op.Profile = s
-        # Cut the through-hole SYMMETRICALLY by an explicit large length each
-        # way (TwoLengths) instead of ThroughAll + Midplane/SideType. The two-
-        # sided handling can misfire on FreeCAD 1.1 (the SideType enum varies)
-        # and cut only ONE direction, leaving a half-cylinder standing at the
-        # far end (field-observed: "the hole is not cut through"). A length of
-        # the body diagonal each way is guaranteed to exit both faces.
-        reach = float(body.Shape.BoundBox.DiagonalLength) or float(L)
-        two_sided = False
-        try:
-            types = list(op.getEnumerationsOfProperty("Type") or [])
-            if "TwoLengths" in types and hasattr(op, "Length2"):
-                op.Type = "TwoLengths"
-                op.Length = reach
-                op.Length2 = reach
-                two_sided = True
-        except Exception:  # noqa: BLE001
-            pass
-        if not two_sided:
-            op.Type = "ThroughAll"
-            # FreeCAD 1.1 deprecates Midplane in favour of SideType; pick the
-            # symmetric/two-sided enum entry by introspection (exact strings
-            # vary across builds), falling back to Midplane on older builds
-            side_set = False
-            if hasattr(op, "SideType"):
-                try:
-                    options = op.getEnumerationsOfProperty("SideType") or []
-                    for want in ("symmetric", "two"):
-                        mm = [o for o in options if want in o.lower()]
-                        if mm:
-                            op.SideType = mm[0]
-                            side_set = True
-                            break
-                except Exception:  # noqa: BLE001
-                    pass
-            if not side_set:
-                op.Midplane = True
+        if blind:
+            # a depth-limited bore from the wall: one-sided Length cut
+            op.Type = "Length"
+            op.Length = float(ch.depth)
+        else:
+            # Cut the through-hole SYMMETRICALLY by an explicit large length
+            # each way (TwoLengths) instead of ThroughAll + Midplane/SideType.
+            # The two-sided handling can misfire on FreeCAD 1.1 (the SideType
+            # enum varies) and cut only ONE direction, leaving a half-cylinder
+            # standing at the far end (field-observed: "the hole is not cut
+            # through"). A length of the body diagonal each way is guaranteed
+            # to exit both faces.
+            reach = float(body.Shape.BoundBox.DiagonalLength) or float(L)
+            two_sided = False
+            try:
+                types = list(op.getEnumerationsOfProperty("Type") or [])
+                if "TwoLengths" in types and hasattr(op, "Length2"):
+                    op.Type = "TwoLengths"
+                    op.Length = reach
+                    op.Length2 = reach
+                    two_sided = True
+            except Exception:  # noqa: BLE001
+                pass
+            if not two_sided:
+                op.Type = "ThroughAll"
+                # FreeCAD 1.1 deprecates Midplane in favour of SideType; pick
+                # the symmetric/two-sided enum entry by introspection (exact
+                # strings vary across builds), falling back to Midplane on
+                # older builds
+                side_set = False
+                if hasattr(op, "SideType"):
+                    try:
+                        options = op.getEnumerationsOfProperty("SideType") or []
+                        for want in ("symmetric", "two"):
+                            mm = [o for o in options if want in o.lower()]
+                            if mm:
+                                op.SideType = mm[0]
+                                side_set = True
+                                break
+                    except Exception:  # noqa: BLE001
+                        pass
+                if not side_set:
+                    op.Midplane = True
         op.Label = ch.label or op.Name
         _apply_refine(op)
         _rollback_if_broken(doc, body, op, s, deferred=deferred)

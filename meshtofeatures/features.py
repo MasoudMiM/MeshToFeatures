@@ -124,6 +124,31 @@ def _outer_loop_is_disk_on(surf_plane, cyl: Cylinder, tol: float) -> bool:
     return outer is not None and _loop_on_cylinder(outer, cyl, tol)
 
 
+def _is_concave_cone(surf) -> bool:
+    """Outward face normals of a conical HOLE wall point toward the axis
+    (a countersink), of a conical stud point away from it."""
+    from .primitives import Cone
+    cone: Cone = surf.fit.primitive
+    k = len(surf.segment.face_indices)
+    centroids = surf.segment.samples[:k]
+    v = centroids - cone.apex
+    h = v @ cone.axis
+    radial = v - np.outer(h, cone.axis)
+    n = np.linalg.norm(radial, axis=1, keepdims=True)
+    n[n == 0.0] = 1.0
+    radial /= n
+    return float(np.mean(np.einsum("ij,ij->i",
+                                   surf.segment.face_normals, radial))) < 0.0
+
+
+def _plane_hole_loops_on_cone(surf_plane, cone, tol: float) -> list:
+    """This plane's *interior* hole loops whose points lie on ``cone`` (the
+    conical mouth's wide rim opening at a face)."""
+    _, holes = _split_loops(surf_plane.segment)
+    return [lp for lp in holes
+            if bool(np.all(cone.distance(lp) < tol))]
+
+
 # --------------------------------------------------------------------------
 # detection
 # --------------------------------------------------------------------------
@@ -169,6 +194,9 @@ def detect_features(report: ReconstructionReport,
               if isinstance(s.fit.primitive, Plane)]
     cyls = [i for i, s in enumerate(report.surfaces)
             if isinstance(s.fit.primitive, Cylinder)]
+    from .primitives import Cone
+    cones = [i for i, s in enumerate(report.surfaces)
+             if isinstance(s.fit.primitive, Cone)]
 
     out = FeatureReport()
     consumed: set[int] = set()
@@ -195,6 +223,88 @@ def detect_features(report: ReconstructionReport,
             if _outer_loop_is_disk_on(sp, cyl, tol):
                 floors.append((p, float(np.mean(_axial(sp.segment.points, cyl)))))
         return {"openings": openings, "floors": floors}
+
+    # ---- countersinks: a concave cone capping a coaxial drilled cylinder ---
+    # A countersunk hole is the conical entry (a full-revolution concave
+    # cone) sitting on the opening side of a drilled cylinder: the cone's
+    # wide rim opens at a face, its narrow end matches the drill radius.
+    # Claimed BEFORE the plain-hole pass so the drill is described as a
+    # countersunk hole, not a bare hole with an unassigned cone. The drill
+    # is then removed from the concave list so no coaxial stack re-claims it.
+    from .standards import identify_metric
+    cs_drills: set[int] = set()
+    for ci in cones:
+        scone = report.surfaces[ci]
+        cone = scone.fit.primitive
+        if not patches[ci].full_u or not _is_concave_cone(scone):
+            continue
+        ha = cone.half_angle
+        h_lo, h_hi = patches[ci].v_range          # heights above apex
+        r_narrow = h_lo * np.tan(ha)
+        r_wide = h_hi * np.tan(ha)
+        drill = None
+        for di in full_concave:
+            if di in consumed or di in cs_drills:
+                continue
+            dc = report.surfaces[di].fit.primitive
+            if abs(float(dc.axis @ cone.axis)) < 1.0 - 1e-6:
+                continue                           # not collinear direction
+            off = dc.point - cone.apex
+            perp = off - float(off @ cone.axis) * cone.axis
+            if float(np.linalg.norm(perp)) > 5.0 * tol:
+                continue                           # not the same axis line
+            if abs(dc.radius - r_narrow) > tol + 0.06 * max(dc.radius, r_narrow):
+                continue                           # radius mismatch at throat
+            drill = di
+            break
+        if drill is None:
+            continue
+        dc = report.surfaces[drill].fit.primitive
+        axis = cone.axis.copy()                    # apex -> opening (mouth)
+        dh = (report.surfaces[drill].segment.points - cone.apex) @ axis
+        mouth_h = float(h_hi)
+        mouth = cone.apex + mouth_h * axis
+        dinfo = _ends(drill)
+        through = len(dinfo["openings"]) >= 1
+        depth = mouth_h - float(dh.min())          # mouth -> floor / far face
+        anchor = dc.point - float(dc.point @ dc.axis) * dc.axis
+        used = [drill, ci]
+        for p in planes:
+            if _plane_hole_loops_on_cone(report.surfaces[p], cone, tol) \
+                    and p not in used:
+                used.append(p)
+        for p, _z in dinfo["openings"]:
+            if p not in used:
+                used.append(p)
+        if not through:
+            for p, _z in dinfo["floors"][:1]:
+                if p not in used:
+                    used.append(p)
+        consumed.add(drill)
+        consumed.add(ci)
+        cs_drills.add(drill)
+        std = identify_metric(2 * dc.radius)
+        out.features.append(Feature(
+            kind="hole",
+            surface_indices=used,
+            params={
+                "diameter": 2 * dc.radius,
+                "depth": depth,
+                "through": through,
+                "position": anchor.tolist(),
+                "axis": axis.tolist(),
+                "standard": std,
+                "countersink": True,
+                "countersink_diameter": 2 * r_wide,
+                "countersink_angle": float(np.rad2deg(2 * ha)),
+                "mouth": mouth.tolist(),
+            },
+            description=(
+                f"Countersunk hole d{2 * dc.radius:g} "
+                f"{'through' if through else f'x {depth:g} blind'}, "
+                f"csink d{2 * r_wide:g} x {np.rad2deg(2 * ha):.0f} deg"),
+        ))
+    full_concave = [i for i in full_concave if i not in cs_drills]
 
     # ---- coaxial stacks of concave cylinders -> holes / counterbores ------
     stacks: list[list[int]] = []
