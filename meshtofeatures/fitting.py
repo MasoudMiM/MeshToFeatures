@@ -246,9 +246,9 @@ def fit_cone(points: np.ndarray, normals: np.ndarray | None = None,
 
     if normals is not None and len(normals) > 0:
         nrm = np.atleast_2d(np.asarray(normals, dtype=float))
-        # For an outward-oriented cone, every surface normal satisfies
-        # n . axis = -sin(alpha) (a plane in the Gauss map). Solve
-        # [N | -1] [axis; s] ~= 0 by SVD, normalize so |axis| = 1.
+        # Every cone surface normal satisfies |n . axis| = sin(alpha) (a
+        # pair of planes in the Gauss map). Solve [N | -1] [axis; s] ~= 0 by
+        # SVD, normalize so |axis| = 1.
         M = np.column_stack([nrm, -np.ones(len(nrm))])
         _, _, vt = np.linalg.svd(M, full_matrices=False)
         sol = vt[-1]
@@ -258,15 +258,19 @@ def fit_cone(points: np.ndarray, normals: np.ndarray | None = None,
             raise ValueError("degenerate cone axis estimate")
         s = sol[3] / norm_a
         axis0 = axis0 / norm_a
-        # orient the axis from apex into the opening: with outward normals
-        # n . axis = -sin(alpha) < 0.
-        if s > 0:
-            axis0, s = -axis0, -s
-        alpha0 = float(np.arcsin(np.clip(-s, 1e-3, 1 - 1e-6)))
+        # |n . axis| = sin(alpha) holds for BOTH a convex cone (normals point
+        # away from the axis, n . axis = -sin a) and a CONCAVE one -- a
+        # countersink / conical hole -- whose normals point toward the axis
+        # (n . axis = +sin a). Take the magnitude for the angle and fix the
+        # axis sign from the GEOMETRY (apex -> opening), not from a sign
+        # assumption that only holds for convex cones.
+        alpha0 = float(np.arcsin(np.clip(abs(s), 1e-3, 1 - 1e-6)))
 
         # Apex: every tangent plane passes through it: n_i . (apex - p_i) = 0
         b = np.einsum("ij,ij->i", nrm, pts)
         apex0, *_ = np.linalg.lstsq(nrm, b, rcond=None)
+        if float((pts.mean(axis=0) - apex0) @ axis0) < 0.0:
+            axis0 = -axis0                       # point from apex into opening
     else:
         raise ValueError("cone fitting currently requires normals for initialization")
 
@@ -285,11 +289,24 @@ def fit_cone(points: np.ndarray, normals: np.ndarray | None = None,
 
     x0 = [*apex0, theta0, phi0, alpha0]
     res = least_squares(residuals, x0=x0, method="lm")
-    apex, axis, alpha = unpack(res.x)
-    # normalize parametrization: keep half-angle in (0, pi/2)
-    alpha = float(alpha)
-    if alpha < 0:
-        alpha, axis = -alpha, -axis
+    apex, axis, _alpha_param = unpack(res.x)
+    # Recover the half-angle from the CONVERGED GEOMETRY, not the raw alpha
+    # parameter. The residual radial*cos(a) - h*sin(a) is periodic in a, so
+    # least_squares can reach a geometrically-perfect fit (cost ~ 0) whose a
+    # has wandered far outside (0, pi/2) along that flat valley -- observed
+    # on short two-ring frusta (tessellated countersinks), where the raw a
+    # wrapped to ~1e6 deg and the old (0, pi/2) guard then rejected an
+    # otherwise-correct cone. The true half-angle is the slope of radial
+    # against axial height through the apex: radial = tan(alpha) * h.
+    v = pts - apex
+    h = v @ axis
+    radial = np.linalg.norm(v - np.outer(h, axis), axis=1)
+    if float(np.median(h)) < 0.0:              # orient axis apex -> opening
+        axis, h = -axis, -h
+    hh = float(h @ h)
+    if hh <= 0.0:
+        raise ValueError("degenerate cone: no axial extent")
+    alpha = float(np.arctan2(float(radial @ h), hh))
     if not (0.0 < alpha < np.pi / 2):
         raise ValueError(f"cone fit produced invalid half-angle {alpha}")
     cone = Cone(apex=apex, axis=axis, half_angle=alpha)

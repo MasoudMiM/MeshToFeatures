@@ -237,6 +237,12 @@ class HoleOp:
     positions: list                 # [(x, y), ...] in the plan frame
     counterbore_diameter: float | None = None
     counterbore_depth: float | None = None
+    #: countersink (conical entry): the mouth diameter and the included
+    #: (full tip) angle in DEGREES. A hole carries at most one of a
+    #: counterbore or a countersink (a counterdrill -- both -- is not yet
+    #: emitted). ``countersink_angle`` defaults the executor to 90 deg.
+    countersink_diameter: float | None = None
+    countersink_angle: float | None = None
     #: blind depth / counterbore measured from the top face (z = length)
     #: when True, from the bottom face (z = 0) when False
     from_top: bool = True
@@ -349,14 +355,21 @@ class ChamferOp:
 
 @dataclass
 class CrossHoleOp:
-    """A THROUGH hole whose axis is not the extrusion direction.
+    """A hole whose axis is not the extrusion direction.
 
-    Carried in WORLD coordinates (3D axis + anchors); the executor cuts a
-    midplane through-all pocket on a sketch normal to the axis."""
+    Carried in WORLD coordinates (3D axis + anchors). A THROUGH hole is cut
+    as a midplane through-all pocket on a sketch normal to the axis. A BLIND
+    hole (``through=False``) is a depth-limited pocket: ``positions3d`` are
+    the ENTRY points on the wall, ``entry_direction`` the unit vector into
+    the part, and ``depth`` the drilled length from the wall to the flat
+    floor."""
     diameter: float
     axis: np.ndarray
     positions3d: list
     label: str = ""
+    through: bool = True
+    depth: float | None = None
+    entry_direction: np.ndarray | None = None
 
 
 @dataclass
@@ -392,12 +405,21 @@ def hole_op_properties(op: HoleOp) -> dict:
         "DrillPoint": "Flat",
         "Threaded": False,
         "Tapered": False,
-        "HoleCutType": "Counterbore" if op.counterbore_diameter else "None",
+        "HoleCutType": "None",
         "Reversed": not op.from_top,
     }
     if not op.through:
         props["Depth"] = float(op.depth)
-    if op.counterbore_diameter:
+    if op.countersink_diameter:
+        # a conical entry: PartDesign::Hole models it by the mouth diameter
+        # plus the included angle (no depth -- the angle and the drill
+        # diameter fix the cone). Takes precedence over a counterbore; a
+        # counterdrill (both) is out of scope.
+        props["HoleCutType"] = "Countersink"
+        props["HoleCutDiameter"] = float(op.countersink_diameter)
+        props["HoleCutCountersinkAngle"] = float(op.countersink_angle or 90.0)
+    elif op.counterbore_diameter:
+        props["HoleCutType"] = "Counterbore"
         props["HoleCutDiameter"] = float(op.counterbore_diameter)
         props["HoleCutDepth"] = float(op.counterbore_depth)
     return props
@@ -605,8 +627,14 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
         1); for holes the wall cylinder (index 0). A cut whose axial span
         clings to z = L is machined from the top, to z = 0 from the
         bottom -- the plan frame's z sign is arbitrary, so this must be
-        computed, not assumed.
+        computed, not assumed. A countersunk hole's drill does not reach
+        its mouth (the cone occupies that band), so the mouth face -- not
+        the drill span -- fixes the machining side.
         """
+        if f.params.get("countersink"):
+            mz = float((np.asarray(f.params["mouth"]) - origin) @ z)
+            L = plan.base.length
+            return (L - mz) <= mz
         idx = f.surface_indices[1 if f.kind == "counterbore" else 0]
         hvals = (report.surfaces[idx].segment.points - origin) @ z
         L = plan.base.length
@@ -617,6 +645,8 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
         counterbore, drill mouth otherwise), measured from frame_origin. The
         executor places the hole sketch here so a bore whose mouth sits below
         the tallest level is cut inward, not modelled as an outward tower."""
+        if f.params.get("countersink"):
+            return float((np.asarray(f.params["mouth"]) - origin) @ z)
         idx = f.surface_indices[1 if f.kind == "counterbore" else 0]
         hvals = (report.surfaces[idx].segment.points - origin) @ z
         L = plan.base.length
@@ -634,7 +664,50 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
             depth=float(spec_params.get("depth", plan.base.length)),
             counterbore_diameter=spec_params.get("counterbore_diameter"),
             counterbore_depth=spec_params.get("counterbore_depth"),
+            countersink_diameter=spec_params.get("countersink_diameter"),
+            countersink_angle=spec_params.get("countersink_angle"),
             positions=positions, label=label, surface_z=surface_z)
+
+    def _cross_hole_op(f):
+        """A non-axis-aligned hole -> CrossHoleOp. A THROUGH hole carries an
+        axis anchor (the executor cuts symmetrically through). A BLIND hole
+        carries the ENTRY point on the wall, the inward direction, and the
+        drilled depth (a one-sided Length pocket)."""
+        axis = np.asarray(f.params["axis"], dtype=float)
+        if f.params.get("through"):
+            return CrossHoleOp(
+                diameter=f.params["diameter"], axis=axis,
+                positions3d=[list(f.params["position"])],
+                through=True, label=f.description)
+        pos = np.asarray(f.params["position"], dtype=float)
+        entry = pos.copy()
+        open_n = None
+        if len(f.surface_indices) > 1:
+            op = report.surfaces[f.surface_indices[1]].fit.primitive
+            if isinstance(op, Plane):
+                open_pt = np.asarray(op.point, dtype=float)
+                open_n = np.asarray(op.normal, dtype=float)
+                denom = float(axis @ open_n)
+                if abs(denom) > 1e-9:              # pierce the wall plane
+                    entry = pos + ((open_pt - pos) @ open_n) / denom * axis
+        # inward direction: toward the floor plane if present, else opposite
+        # the wall's outward normal
+        if len(f.surface_indices) > 2 and isinstance(
+                report.surfaces[f.surface_indices[2]].fit.primitive, Plane):
+            floor_pt = np.asarray(
+                report.surfaces[f.surface_indices[2]].fit.primitive.point,
+                dtype=float)
+            d = float((floor_pt - entry) @ axis)
+        elif open_n is not None:
+            d = -float(open_n @ axis)
+        else:
+            d = 1.0
+        direction = axis * (1.0 if d >= 0 else -1.0)
+        return CrossHoleOp(
+            diameter=f.params["diameter"], axis=axis,
+            positions3d=[list(entry)], through=False,
+            depth=float(f.params["depth"]),
+            entry_direction=list(direction), label=f.description)
 
     # horizontal cylinders protruding beyond the base become circular
     # lateral pads (design note 36); the surfaces they consume are skipped
@@ -648,14 +721,9 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
         if any(i in consumed for m in p.members for i in m.surface_indices):
             continue
         kind = p.members[0].kind
-        if kind == "hole" and not _aligned(p.members[0]) \
-                and p.members[0].params.get("through"):
+        if kind == "hole" and not _aligned(p.members[0]):
             for m in p.members:
-                plan.cross_holes.append(CrossHoleOp(
-                    diameter=m.params["diameter"],
-                    axis=np.asarray(m.params["axis"], dtype=float),
-                    positions3d=[list(m.params["position"])],
-                    label=m.description))
+                plan.cross_holes.append(_cross_hole_op(m))
         elif kind in ("hole", "counterbore") and _aligned(p.members[0]):
             plan.holes.append(_hole_op(p.members[0].params,
                                        [_pos2d(m) for m in p.members],
@@ -684,12 +752,8 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
             plan.holes.append(_hole_op(f.params, [_pos2d(f)], f.description,
                                        from_top=_side(f),
                                        surface_z=_surface_z(f)))
-        elif f.kind == "hole" and f.params.get("through"):
-            plan.cross_holes.append(CrossHoleOp(
-                diameter=f.params["diameter"],
-                axis=np.asarray(f.params["axis"], dtype=float),
-                positions3d=[list(f.params["position"])],
-                label=f.description))
+        elif f.kind == "hole" and not _aligned(f):
+            plan.cross_holes.append(_cross_hole_op(f))
         elif f.kind == "boss" and _aligned(f):
             hvals = (report.surfaces[f.surface_indices[0]].segment.points
                      - origin) @ z

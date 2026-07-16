@@ -136,6 +136,28 @@ def _rebuild_mesh(plan) -> trimesh.Trimesh:
                 zc = floor + ch / 2 if from_top else floor - ch / 2
                 cb.apply_translation([x, y, zc])
                 solid = solid.difference(cb)
+            if getattr(h, "countersink_diameter", None):
+                # revolve the conical cavity: drill radius at the throat out
+                # to the countersink radius at the mouth face (surface_z).
+                from shapely.geometry import Polygon as _Poly
+                dr = h.diameter / 2.0
+                cr = h.countersink_diameter / 2.0
+                ha = np.deg2rad((h.countersink_angle or 90.0) / 2.0)
+                run = (cr - dr) / np.tan(ha)
+                mouth = sz if from_top else 0.0
+                if from_top:
+                    throat, over = mouth - run, mouth + 1.0
+                    prof = [(0.0, throat), (dr, throat), (cr, mouth),
+                            (cr, over), (0.0, over)]
+                else:
+                    throat, over = mouth + run, mouth - 1.0
+                    # reverse winding so the revolve faces outward (a volume)
+                    prof = [(0.0, over), (cr, over), (cr, mouth),
+                            (dr, throat), (0.0, throat)]
+                tool = trimesh.creation.revolve(
+                    _Poly(prof).exterior.coords, sections=SECTIONS)
+                tool.apply_translation([x, y, 0.0])
+                solid = solid.difference(tool)
     # apply fillets (convex, ~perpendicular blends) via corner-tool cuts;
     # FilletOps live in WORLD coordinates, this solid is in the PLAN
     # frame -- transform each op's geometry into the plan frame first
@@ -153,13 +175,32 @@ def _rebuild_mesh(plan) -> trimesh.Trimesh:
     diag_pf = float(np.linalg.norm(solid.bounds[1] - solid.bounds[0]))
     for ch in getattr(plan, "cross_holes", []):
         axis = vec(ch.axis)
-        cyl = trimesh.creation.cylinder(radius=ch.diameter / 2,
-                                        height=3.0 * diag_pf, sections=96)
-        cyl.apply_transform(trimesh.geometry.align_vectors([0, 0, 1.0], axis))
-        for pos in ch.positions3d:
-            c = cyl.copy()
-            c.apply_translation(loc(pos))
-            solid = solid.difference(c)
+        if getattr(ch, "through", True):
+            cyl = trimesh.creation.cylinder(radius=ch.diameter / 2,
+                                            height=3.0 * diag_pf, sections=96)
+            cyl.apply_transform(
+                trimesh.geometry.align_vectors([0, 0, 1.0], axis))
+            for pos in ch.positions3d:
+                c = cyl.copy()
+                c.apply_translation(loc(pos))
+                solid = solid.difference(c)
+        else:
+            # blind: a depth-limited bore from each ENTRY point along the
+            # inward direction, with a small outward overhang for a clean cut
+            direction = vec(ch.entry_direction)
+            pad = 0.02 * diag_pf
+            length = float(ch.depth) + pad
+            cyl = trimesh.creation.cylinder(radius=ch.diameter / 2,
+                                            height=length, sections=96)
+            cyl.apply_transform(
+                trimesh.geometry.align_vectors([0, 0, 1.0], direction))
+            for pos in ch.positions3d:
+                c = cyl.copy()
+                # cylinder is centred on its axis; shift so it spans from
+                # (entry - pad) to (entry + depth) along the inward direction
+                centre = loc(pos) + (length / 2.0 - pad) * direction
+                c.apply_translation(centre)
+                solid = solid.difference(c)
 
     for co in getattr(plan, "chamfers", []):
         e0, e1 = loc(co.edge_start), loc(co.edge_end)

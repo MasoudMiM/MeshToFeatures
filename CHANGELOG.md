@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased
+
+Two new rebuilt feature types, plus a cone-fitting robustness fix that
+made them possible.
+
+### Added
+
+- **Countersunk holes.** A concave cone capping a coaxial drilled
+  cylinder is recognized as a countersink and rebuilt as a
+  `PartDesign::Hole` with `HoleCutType = Countersink` (mouth diameter +
+  included angle). Handles through and blind holes, arbitrary included
+  angles, off-centre and rotated parts, grid patterns, top- and
+  bottom-face machining, and coexistence with plain and counterbored
+  holes. Previously the conical entry of every flat-head-screw hole was
+  fitted but dropped as an unassigned surface.
+- **Blind cross-axis holes.** A side hole that stops inside the part is
+  now rebuilt as a depth-limited `CrossHoleOp` (entry point on the wall,
+  inward direction, drilled depth), cut as a one-sided `Length` pocket.
+  Previously only *through* cross-axis holes were rebuilt; blind ones
+  were reported as unplanned.
+
+### Fixed
+
+- **Cone fitting** could diverge or mis-select on short two-ring cone
+  segments (tessellated countersinks): the half-angle parameter wandered
+  along the periodic residual valley to a wrapped value the `(0, π/2)`
+  guard then rejected, and the normal-based initialization assumed a
+  convex cone, sending concave (hole) cones to a degenerate solution.
+  The half-angle is now recovered from the converged geometry and the
+  axis orientation from the point cloud, so both convex and concave
+  cones fit robustly. Without this, countersink cones were mis-fitted as
+  spheres (two rings lie on a common sphere).
+
+### Docs
+
+- README: countersinks and blind cross-axis holes added to the supported
+  list; corrected the stale note that chamfers are detected-but-not-
+  rebuilt (they are rebuilt as `PartDesign::Chamfer`).
+
+### Tests
+
+- Suite grows from 318 to 379 (all passing), including countersink
+  detection/planning/property-mapping/round-trip, blind cross-hole
+  planning and round-trips, convex/concave cone recovery, and a
+  network-guarded robustness pass over a real machined part
+  (`featuretype.STL`).
+
 ## 0.16.0 (beta) — 2026-07-11
 
 First public beta release.

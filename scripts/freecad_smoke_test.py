@@ -165,6 +165,29 @@ check("counterbore body volume within 1%",
       f"{cbody.Shape.Volume:.2f} vs {cb_solid.Volume:.2f}")
 check("counterbore body shape is valid", cbody.Shape.isValid())
 
+# --- PartDesign Hole feature (countersunk plate) ----------------------------
+# drill (d5) through a 5 mm plate with a 90 deg countersink to d10 at the top
+cs_solid = Part.makeBox(40, 30, 5, App.Vector(-20, -15, 0)) \
+    .cut(Part.makeCylinder(2.5, 50, App.Vector(0, 0, -20))) \
+    .cut(Part.makeCone(2.5, 5.0, 2.5, App.Vector(0, 0, 2.5)))
+csv, csf = cs_solid.tessellate(0.05)
+cstm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in csv]),
+                       faces=np.array(csf), process=True)
+csrep = snap_report(reconstruct(cstm)).report
+cspatches = plan_patches(csrep)
+csfeats = detect_features(csrep, cspatches)
+csplan = plan_history(csrep, csfeats, detect_patterns(csfeats), cspatches)
+cscount = [h for h in csplan.holes if h.countersink_diameter]
+check("countersink plan found a countersunk hole", len(cscount) >= 1,
+      f"{len(cscount)} countersunk of {len(csplan.holes)} holes")
+csbody = build.build_body(doc, csplan, name="RebuiltCountersink")
+check("countersink body uses a PartDesign::Hole feature",
+      any(o.TypeId == "PartDesign::Hole" for o in csbody.Group))
+check("countersink body volume within 2%",
+      abs(csbody.Shape.Volume - cs_solid.Volume) / cs_solid.Volume < 0.02,
+      f"{csbody.Shape.Volume:.2f} vs {cs_solid.Volume:.2f}")
+check("countersink body shape is valid", csbody.Shape.isValid())
+
 # --- horizontal fillets rebuilt as PartDesign::Fillet ------------------------
 fp = Part.makeBox(40, 30, 10, App.Vector(-20, -15, 0))
 top_edges = [e for e in fp.Edges
@@ -229,6 +252,26 @@ check("cross-hole body volume within 1%",
       abs(xbody.Shape.Volume - xs.Volume) / xs.Volume < 0.01,
       f"{xbody.Shape.Volume:.2f} vs {xs.Volume:.2f}")
 check("cross-hole body shape is valid", xbody.Shape.isValid())
+
+# --- BLIND cross-axis hole rebuilt as a one-sided Length pocket --------------
+# a d6 hole entering the -x face, drilled 25 mm in (blind, floors inside)
+bxs = Part.makeBox(40, 30, 10, App.Vector(-20, -15, 0)) \
+    .cut(Part.makeCylinder(3.0, 25, App.Vector(-20, 0, 5), App.Vector(1, 0, 0)))
+bxv, bxf = bxs.tessellate(0.05)
+bxtm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in bxv]),
+                       faces=np.array(bxf), process=True)
+bxrep = snap_report(reconstruct(bxtm)).report
+bxpat = plan_patches(bxrep)
+bxfeats = detect_features(bxrep, bxpat)
+bxplan = plan_history(bxrep, bxfeats, detect_patterns(bxfeats), bxpat)
+bxblind = [c for c in bxplan.cross_holes if not c.through]
+check("blind cross-hole plan carries 1 blind op", len(bxblind) == 1,
+      f"{len(bxblind)} blind of {len(bxplan.cross_holes)} cross-holes")
+bxbody = build.build_body(doc, bxplan, name="RebuiltBlindCrossHole")
+check("blind cross-hole body volume within 2%",
+      abs(bxbody.Shape.Volume - bxs.Volume) / bxs.Volume < 0.02,
+      f"{bxbody.Shape.Volume:.2f} vs {bxs.Volume:.2f}")
+check("blind cross-hole body shape is valid", bxbody.Shape.isValid())
 
 # --- multi-level step part: exercises from-bottom/from-top pocket sides ------
 sp = Part.makeBox(40, 30, 6, App.Vector(-20, -15, 0)) \
