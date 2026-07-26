@@ -68,6 +68,27 @@ class TestFeatureTypeStl:
         assert not any(h.params.get("countersink")
                        for h in feats.by_kind("hole"))
 
+    def test_no_spurious_conical_pockets(self):
+        # no cones on this part means no conical pockets, and in particular
+        # the terrace pass must still own every flat recess it owned before
+        mesh = _load("featuretype.STL")
+        _, feats, plan = _full(mesh)
+        assert feats.by_kind("cone_pocket") == []
+        assert plan.cones == []
+        assert len(plan.pockets) >= 2
+
+    def test_counterbores_do_not_become_counterdrills(self):
+        # this part's 8 bores are TRUE counterbores: flat annular shoulders,
+        # no conical transition. The counterdrill pass must leave them alone
+        # (it pairs a bore to a cone, and this part has no cones at all).
+        mesh = _load("featuretype.STL")
+        _, feats, plan = _full(mesh)
+        assert len(feats.by_kind("counterbore")) == 8
+        for op in plan.holes:
+            assert op.countersink_diameter is None
+        cb_ops = [op for op in plan.holes if op.counterbore_diameter]
+        assert len(cb_ops) == 1 and len(cb_ops[0].positions) == 8
+
     def test_no_spurious_blind_cross_holes(self):
         # every planned cross-hole must be geometrically justified: a blind
         # one must carry a positive depth and a unit entry direction

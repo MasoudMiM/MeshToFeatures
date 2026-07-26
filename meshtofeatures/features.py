@@ -149,6 +149,14 @@ def _plane_hole_loops_on_cone(surf_plane, cone, tol: float) -> list:
             if bool(np.all(cone.distance(lp) < tol))]
 
 
+def _outer_loop_is_disk_on_cone(surf_plane, cone, tol: float) -> bool:
+    """True when the plane's *outer* boundary rides the cone: the flat floor
+    of a truncated conical recess (the cone's own end disk), as opposed to a
+    face the cone merely opens through."""
+    outer, _ = _split_loops(surf_plane.segment)
+    return outer is not None and bool(np.all(cone.distance(outer) < tol))
+
+
 # --------------------------------------------------------------------------
 # detection
 # --------------------------------------------------------------------------
@@ -264,15 +272,59 @@ def detect_features(report: ReconstructionReport,
         dh = (report.surfaces[drill].segment.points - cone.apex) @ axis
         mouth_h = float(h_hi)
         mouth = cone.apex + mouth_h * axis
+
+        # ---- counterdrill: a cylindrical recess capping the cone ----------
+        # A counterdrilled hole is a countersink whose cone does NOT open at
+        # a face: its wide rim is the FLOOR of a coaxial bore of the same
+        # radius, which carries on to the real mouth. There is no annular
+        # shoulder (bore wall runs straight into the cone), so the
+        # counterbore rule in the coaxial-stack pass below cannot see it --
+        # and if the bore were left behind it would be re-emitted as a
+        # spurious blind hole of the bore diameter. Claim it here.
+        bore = None
+        for bi in full_concave:
+            if bi in consumed or bi in cs_drills or bi == drill:
+                continue
+            bc = report.surfaces[bi].fit.primitive
+            if abs(float(bc.axis @ cone.axis)) < 1.0 - 1e-6:
+                continue                           # not collinear direction
+            off = bc.point - cone.apex
+            perp = off - float(off @ cone.axis) * cone.axis
+            if float(np.linalg.norm(perp)) > 5.0 * tol:
+                continue                           # not the same axis line
+            if abs(bc.radius - r_wide) > tol + 0.06 * max(bc.radius, r_wide):
+                continue                           # not the cone's wide rim
+            bh = (report.surfaces[bi].segment.points - cone.apex) @ axis
+            # must SIT ON the rim (its near end at the cone's wide end) and
+            # extend outward from it
+            if abs(float(bh.min()) - h_hi) > tol + 0.05 * (h_hi - h_lo):
+                continue
+            if float(bh.max()) <= h_hi + tol:
+                continue
+            bore = bi
+            bore_h = float(bh.max())
+            break
+        if bore is not None:
+            mouth_h = bore_h                       # the true mouth: bore top
+            mouth = cone.apex + mouth_h * axis
+
         dinfo = _ends(drill)
         through = len(dinfo["openings"]) >= 1
         depth = mouth_h - float(dh.min())          # mouth -> floor / far face
         anchor = dc.point - float(dc.point @ dc.axis) * dc.axis
         used = [drill, ci]
+        if bore is not None:
+            used.append(bore)
         for p in planes:
             if _plane_hole_loops_on_cone(report.surfaces[p], cone, tol) \
                     and p not in used:
                 used.append(p)
+        if bore is not None:
+            bcyl = report.surfaces[bore].fit.primitive
+            for p in planes:
+                if _plane_hole_loops_on(report.surfaces[p], bcyl, tol) \
+                        and p not in used:
+                    used.append(p)
         for p, _z in dinfo["openings"]:
             if p not in used:
                 used.append(p)
@@ -284,27 +336,114 @@ def detect_features(report: ReconstructionReport,
         consumed.add(ci)
         cs_drills.add(drill)
         std = identify_metric(2 * dc.radius)
+        params = {
+            "diameter": 2 * dc.radius,
+            "depth": depth,
+            "through": through,
+            "position": anchor.tolist(),
+            "axis": axis.tolist(),
+            "standard": std,
+            "countersink": True,
+            "countersink_diameter": 2 * r_wide,
+            "countersink_angle": float(np.rad2deg(2 * ha)),
+            "mouth": mouth.tolist(),
+        }
+        description = (
+            f"Countersunk hole d{2 * dc.radius:g} "
+            f"{'through' if through else f'x {depth:g} blind'}, "
+            f"csink d{2 * r_wide:g} x {np.rad2deg(2 * ha):.0f} deg")
+        if bore is not None:
+            consumed.add(bore)
+            cs_drills.add(bore)
+            bcyl = report.surfaces[bore].fit.primitive
+            cb_depth = bore_h - float(h_hi)
+            params["counterbore_diameter"] = 2 * bcyl.radius
+            params["counterbore_depth"] = cb_depth
+            description = (
+                f"Counterdrilled hole d{2 * dc.radius:g} "
+                f"{'through' if through else f'x {depth:g} blind'}, "
+                f"bore d{2 * bcyl.radius:g} x {cb_depth:g}, "
+                f"{np.rad2deg(2 * ha):.0f} deg taper")
         out.features.append(Feature(
             kind="hole",
             surface_indices=used,
+            params=params,
+            description=description,
+        ))
+    full_concave = [i for i in full_concave if i not in cs_drills]
+
+    # ---- standalone concave cones -> conical pockets -----------------------
+    # A concave full-revolution cone that no drill and no bore claimed is a
+    # conical recess in its own right: a ball-park-taper pocket, a chamfered
+    # seat, a tapered through hole. Runs AFTER the countersink/counterdrill
+    # pass so those keep their cones. Without this rule the cone is fitted
+    # and then dropped, and the terrace machinery substitutes a
+    # STRAIGHT-WALLED pocket built from the floor loop -- the right depth at
+    # the wrong radius, reported as a clean reconstruction.
+    for ci in cones:
+        if ci in consumed:
+            continue
+        scone = report.surfaces[ci]
+        cone = scone.fit.primitive
+        if not patches[ci].full_u or not _is_concave_cone(scone):
+            continue
+        ha = cone.half_angle
+        h_lo, h_hi = patches[ci].v_range           # heights above the apex
+        depth = float(h_hi - h_lo)
+        if depth <= tol:
+            continue
+        out_axis = cone.axis.copy()                # apex -> wide rim
+        r_mouth = float(h_hi * np.tan(ha))
+        r_far = float(h_lo * np.tan(ha))
+        if r_far < tol:
+            r_far = 0.0                            # runs to a point: a fitted
+            #  micro-radius is mesh noise, and carrying it makes a degenerate
+            #  sliver face in both the executor and the manifold gate
+
+        # the faces the cone opens through: their interior hole loops ride it
+        openings = []
+        for p in planes:
+            lps = _plane_hole_loops_on_cone(report.surfaces[p], cone, tol)
+            if lps:
+                openings.append((p, max(float(np.mean(
+                    (lp - cone.apex) @ out_axis)) for lp in lps)))
+        if not openings:
+            continue                               # not open at any face
+        openings.sort(key=lambda t: t[1])
+        mouth_p = openings[-1][0]                  # the WIDE end is the mouth
+        through = len(openings) >= 2
+        floor_p = None
+        if not through:
+            for p in planes:
+                if p != mouth_p and p not in consumed and \
+                        _outer_loop_is_disk_on_cone(report.surfaces[p], cone,
+                                                    tol):
+                    floor_p = p
+                    break
+        mouth = cone.apex + h_hi * out_axis
+        anchor = cone.apex - float(cone.apex @ out_axis) * out_axis
+        used = [ci, mouth_p]
+        if floor_p is not None:
+            used.append(floor_p)
+            consumed.add(floor_p)
+        consumed.add(ci)
+        out.features.append(Feature(
+            kind="cone_pocket",
+            surface_indices=used,
             params={
-                "diameter": 2 * dc.radius,
+                "mouth_radius": r_mouth,
+                "far_radius": r_far,
                 "depth": depth,
                 "through": through,
                 "position": anchor.tolist(),
-                "axis": axis.tolist(),
-                "standard": std,
-                "countersink": True,
-                "countersink_diameter": 2 * r_wide,
-                "countersink_angle": float(np.rad2deg(2 * ha)),
+                "axis": (-out_axis).tolist(),      # mouth -> into material
                 "mouth": mouth.tolist(),
+                "half_angle": float(np.rad2deg(ha)),
             },
             description=(
-                f"Countersunk hole d{2 * dc.radius:g} "
-                f"{'through' if through else f'x {depth:g} blind'}, "
-                f"csink d{2 * r_wide:g} x {np.rad2deg(2 * ha):.0f} deg"),
+                f"Conical pocket d{2 * r_mouth:g} -> d{2 * r_far:g} "
+                f"{'through' if through else f'x {depth:g} deep'}"),
         ))
-    full_concave = [i for i in full_concave if i not in cs_drills]
 
     # ---- coaxial stacks of concave cylinders -> holes / counterbores ------
     stacks: list[list[int]] = []

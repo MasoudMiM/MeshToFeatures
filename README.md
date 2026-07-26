@@ -37,6 +37,12 @@ Recognized and rebuilt on the current beta:
 - **Countersunk holes**: the conical entry of a flat-head-screw hole is
   rebuilt as a `PartDesign::Hole` countersink (mouth diameter + included
   angle), through or blind, on the top or bottom face.
+- **Counterdrilled holes**: a cylindrical recess with a conical
+  transition down to the drill (a flat-head screw seated in a bore) is
+  rebuilt as a single `PartDesign::Hole` with
+  `HoleCutType = Counterdrill`.
+- **Conical pockets**: tapered recesses, conical seats, and tapered
+  through holes, rebuilt as `PartDesign::SubtractiveCone` primitives.
 - **Cross-axis holes** (horizontal holes), both through and blind (a
   blind side hole is rebuilt as a depth-limited pocket).
 - **Vertical bosses** and **lateral pads** — flanges, rails, and gusseted
@@ -56,10 +62,10 @@ Recognized and rebuilt on the current beta:
 
 - **Prismatic parts only.** The reconstruction targets parts made of
   planes and cylinders (plates, brackets, housings, fixtures), plus
-  conical countersinks. Organic / sculpted / scanned shapes will not
-  reconstruct meaningfully. Spheres and tori are fitted by the core but
-  not yet rebuilt as features; cones are rebuilt only as countersinks
-  (standalone conical faces are not yet a feature).
+  conical countersinks and conical pockets. Organic / sculpted / scanned
+  shapes will not reconstruct meaningfully. Spheres and tori are fitted
+  by the core but not yet rebuilt as features; CONVEX cones (tapered
+  bosses, draft-angled studs) are not yet a feature either.
 - **Dimensional fidelity is bounded by the mesh.** Snapping tolerance is
   ~0.1% of the part diagonal; a coarse tessellation limits what can be
   recovered. Some internal recess boundaries are intentionally oversized

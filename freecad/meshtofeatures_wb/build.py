@@ -104,6 +104,60 @@ def _circle_sketch(doc, body, plan, z, entries, label, flip=False):
     return sk
 
 
+def _point_placement(plan: BuildPlan, x: float, y: float,
+                     z: float) -> "App.Placement":
+    """World placement of a PRIMITIVE based at frame point (x, y, z) with
+    its local +z along the frame z. Unlike ``_placement`` this carries the
+    in-plane offset, because a primitive is positioned by its placement
+    rather than by geometry inside a sketch."""
+    o = (plan.frame_origin + x * plan.frame_x + y * plan.frame_y
+         + z * plan.frame_z)
+    m = App.Matrix(
+        float(plan.frame_x[0]), float(plan.frame_y[0]),
+        float(plan.frame_z[0]), float(o[0]),
+        float(plan.frame_x[1]), float(plan.frame_y[1]),
+        float(plan.frame_z[1]), float(o[1]),
+        float(plan.frame_x[2]), float(plan.frame_y[2]),
+        float(plan.frame_z[2]), float(o[2]),
+        0.0, 0.0, 0.0, 1.0)
+    return App.Placement(m)
+
+
+def _add_cone(doc, body, plan, name, x, y, z_lo, r_lo, r_hi, height,
+              additive=False, label="", deferred=None):
+    """Cut (or add) a cone as a placed PartDesign primitive.
+
+    ``Radius1`` is the radius at the BASE and ``Radius2`` at the top, so the
+    caller passes the radii at the low-z and high-z ends and the primitive
+    needs no rotation beyond the frame's. A primitive is used rather than a
+    tapered pocket because the taper SIGN is a convention that cannot be
+    verified without FreeCAD, and rather than a sketch-and-revolve because
+    there is no profile wire to fail to close. Either radius may be 0 (a
+    cone running to a point) but not both.
+    """
+    if height <= 0.0 or (r_lo <= 0.0 and r_hi <= 0.0):
+        return None
+    kind = "PartDesign::AdditiveCone" if additive \
+        else "PartDesign::SubtractiveCone"
+    try:
+        op = doc.addObject(kind, name)
+    except Exception as exc:                    # noqa: BLE001 - old FreeCAD
+        App.Console.PrintError(
+            f"[meshtofeatures] {label or name}: this FreeCAD has no "
+            f"{kind} primitive ({exc}); the conical face is NOT rebuilt\n")
+        return None
+    body.addObject(op)
+    op.Radius1 = float(r_lo)
+    op.Radius2 = float(r_hi)
+    op.Height = float(height)
+    op.Placement = _point_placement(plan, float(x), float(y), float(z_lo))
+    if label:
+        op.Label = label
+    _apply_refine(op)
+    _rollback_if_broken(doc, body, op, deferred=deferred)
+    return op
+
+
 def _apply_refine(op):
     """Turn on Refine so booleans clean up residual sliver faces/edges
     (documented cause of thin 'sheet' walls rendered at curved cut
@@ -420,8 +474,59 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                 _apply_refine(op2)
                 s2.Visibility = False
                 _rollback_if_broken(doc, body, op2, s2, deferred=deferred)
+            if h.countersink_diameter:
+                # The pocket path cuts cylinders only, so the CONICAL entry
+                # of a countersunk or counterdrilled hole used to be dropped
+                # here (the PartDesign::Hole path above does it natively via
+                # HoleCutType). Cut it as a placed SubtractiveCone: the mouth
+                # of the taper is the opening face for a plain countersink,
+                # and the BORE FLOOR when a counterbore sits above it.
+                dr = float(h.diameter) / 2.0
+                cr = float(h.countersink_diameter) / 2.0
+                ha = math.radians(float(h.countersink_angle or 90.0) / 2.0)
+                run = (cr - dr) / max(math.tan(ha), 1e-9)
+                cbd = float(h.counterbore_depth) if h.counterbore_diameter \
+                    else 0.0
+                face_z = float(surf_z) if surf_z is not None \
+                    else (L if top else 0.0)
+                if top:
+                    mouth_z = face_z - cbd
+                    z_lo, r_lo, r_hi = mouth_z - run, dr, cr
+                else:
+                    mouth_z = face_z + cbd
+                    z_lo, r_lo, r_hi = mouth_z, cr, dr
+                for pos in h.positions:
+                    _add_cone(doc, body, plan, f"Countersink{k}",
+                              pos[0], pos[1], z_lo, r_lo, r_hi, run,
+                              label=f"Countersink{k}", deferred=deferred)
             doc.recompute()
 
+    doc.recompute()
+
+    # ---- conical pockets: placed Subtractive/AdditiveCone primitives -------
+    for k, c in enumerate(getattr(plan, "cones", [])):
+        try:
+            diag = float(body.Shape.BoundBox.DiagonalLength) or float(L)
+        except Exception:                       # noqa: BLE001
+            diag = float(L)
+        pad = 1.5e-3 * diag                     # same buffer doctrine as the
+        #  terraces: never end a cut exactly ON the face it opens through
+        slope = (c.r_mouth - c.r_far) / max(c.depth, 1e-12)
+        face_z = c.surface_z if c.surface_z is not None \
+            else (L if c.from_top else 0.0)
+        far_pad = pad if c.through else 0.0
+        r_end = max(c.r_far - slope * far_pad, 0.0)
+        height = c.depth + far_pad + pad
+        if c.from_top:
+            z_lo = float(face_z) - c.depth - far_pad
+            r_lo, r_hi = r_end, c.r_mouth + slope * pad
+        else:
+            z_lo = float(face_z) - pad
+            r_lo, r_hi = c.r_mouth + slope * pad, r_end
+        for pos in c.positions:
+            _add_cone(doc, body, plan, f"ConePocket{k}", pos[0], pos[1],
+                      z_lo, r_lo, r_hi, height, additive=c.additive,
+                      label=c.label or f"ConePocket{k}", deferred=deferred)
     doc.recompute()
 
     # ---- cross-axis holes: through = midplane pocket, blind = Length -------

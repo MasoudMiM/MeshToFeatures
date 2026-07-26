@@ -532,6 +532,75 @@ v0.15.6 (lateral pads):
     midplane pocket. The manifold gate cuts a matching depth-limited bore
     from each entry point.
 
+47. **Counterdrills are a countersink whose cone opens into a bore, not at
+    a face** (unreleased). A counterdrilled hole carries BOTH cuts: a
+    cylindrical recess, then a conical transition down to the drill. Two
+    things make it invisible to the rules that already existed. It has **no
+    annular shoulder** — the bore wall runs straight into the cone — so the
+    counterbore rule (which requires a plane whose outer loop is a disk on
+    the big cylinder and whose hole loop is on the small one) cannot fire;
+    and its cone's wide rim does **not** open at a face, so note 45's
+    countersink is only half the story. The observed failure was silent
+    dimensional nonsense rather than a dropped surface: the countersink pass
+    claimed cone + drill and stripped the drill from the concave list, so the
+    orphaned bore fell through to the plain-hole branch and was re-emitted as
+    a *spurious blind hole of the bore diameter*, while the countersink's
+    `mouth` — and hence `surface_z`, the sketch plane — landed on the bore
+    FLOOR instead of the top face. Fix: inside the countersink pass, after
+    the drill is matched, look for a coaxial concave cylinder whose radius
+    matches the cone's WIDE radius (same 6% gate as the throat match) and
+    whose near end sits on the cone's wide rim. If found, it is the bore:
+    `mouth` moves to the bore's far end, `depth` is re-measured from there,
+    and one feature is emitted carrying `counterbore_diameter` +
+    `counterbore_depth` alongside the countersink params. Consuming the bore
+    (via `cs_drills`) is what stops the spurious hole.
+    `hole_op_properties` maps both-set to `HoleCutType = "Counterdrill"`,
+    where `HoleCutDepth` is the CYLINDRICAL part only — the cone below it is
+    fixed by the angle and the two diameters, so it must NOT be folded in.
+    Radius-matching the bore to the cone rim is also the discriminator that
+    keeps a genuine counterbore-with-a-countersunk-hole-at-its-floor (rim
+    narrower than the bore, real shoulder present) out of this rule.
+    **Testing lesson:** the manifold round-trip gate passed on the BROKEN
+    behaviour — cone + drill + a spurious bore cylinder remove exactly the
+    same material as a counterdrill, so surface distance and volume are both
+    blind to it. Only the semantic assertions (one hole, mouth on the top
+    face, bore depth) caught it. A round-trip is a necessary gate, not a
+    sufficient one: when a mis-detection is a re-PARTITION of the same cut
+    volume, only feature-level assertions can see it.
+
+
+48. **Standalone conical pockets are a cone nobody claimed** (unreleased).
+    Note 45's countersink rule needs a coaxial drill and note 47's
+    counterdrill a coaxial bore; a cone with neither -- a tapered recess, a
+    ball-park seat, a tapered through hole -- was fitted and then dropped.
+    The failure was NOT a visible gap: with the cone gone, the terrace pass
+    found the recess's floor disk and substituted a STRAIGHT-WALLED pocket
+    built from the FLOOR loop, so an r8->r3 x 5 deep recess rebuilt as an
+    r3 x 5 cylinder (~28% of the right volume), at coverage 1.0 with an
+    empty `unplanned` list. Detection runs right after the
+    countersink/counterdrill pass (so those keep their cones): a concave
+    full-revolution cone, the face whose interior hole loop rides its WIDE
+    rim is the mouth, two such faces means a tapered through hole, and a
+    plane whose OUTER loop rides the cone is the flat floor. A fitted far
+    radius below tolerance snaps to a true point -- a 1.2e-4 micro-radius is
+    mesh noise, and carrying it makes a degenerate sliver face in the
+    executor and a non-manifold revolve in the gate.
+    Two suppressions are load-bearing and neither is in `features.py`'s
+    `consumed` set, which only gates later DETECTION rules: the floor plane
+    is passed to `_plan_terraces` as `skip` (else the straight-walled
+    substitute is emitted alongside the cone), and a cone feature joins the
+    `_drilled` list that keeps openings out of the base profile (else a
+    tapered through hole is pre-punched as a straight bore of the mouth
+    radius). Rebuilt as a placed `PartDesign::SubtractiveCone` primitive
+    (`Radius1` at the base, `Radius2` at the top), chosen over a tapered
+    pocket -- whose taper SIGN is a convention that cannot be verified
+    without FreeCAD -- and over a sketch-and-revolve, which needs a closed
+    profile wire. The same primitive retrofits the conical entry that the
+    pocket-fallback path used to drop for bottom-face and below-top
+    countersinks (note 45's "documented degradation"): the taper's mouth is
+    the opening face for a plain countersink and the BORE FLOOR when a
+    counterbore sits above it.
+
 ## Run tests
 
 ```

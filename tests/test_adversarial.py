@@ -144,13 +144,18 @@ def _rebuild_mesh(plan) -> trimesh.Trimesh:
                 cr = h.countersink_diameter / 2.0
                 ha = np.deg2rad((h.countersink_angle or 90.0) / 2.0)
                 run = (cr - dr) / np.tan(ha)
-                mouth = sz if from_top else 0.0
+                # a COUNTERDRILL's cone rim is not at the face: it is the
+                # floor of the bore cut above, one counterbore_depth in. The
+                # (cr, over) leg then simply re-cuts that already-open bore.
+                cbd = float(h.counterbore_depth) if h.counterbore_diameter \
+                    else 0.0
+                mouth = (sz - cbd) if from_top else cbd
                 if from_top:
-                    throat, over = mouth - run, mouth + 1.0
+                    throat, over = mouth - run, mouth + cbd + 1.0
                     prof = [(0.0, throat), (dr, throat), (cr, mouth),
                             (cr, over), (0.0, over)]
                 else:
-                    throat, over = mouth + run, mouth - 1.0
+                    throat, over = mouth + run, mouth - cbd - 1.0
                     # reverse winding so the revolve faces outward (a volume)
                     prof = [(0.0, over), (cr, over), (cr, mouth),
                             (dr, throat), (0.0, throat)]
@@ -158,6 +163,36 @@ def _rebuild_mesh(plan) -> trimesh.Trimesh:
                     _Poly(prof).exterior.coords, sections=SECTIONS)
                 tool.apply_translation([x, y, 0.0])
                 solid = solid.difference(tool)
+    # conical pockets: a revolved frustum, r_mouth at the opening face
+    # tapering to r_far at depth (r_far = 0 runs to a point). A THROUGH cone
+    # is extrapolated a little past the far face along its own slope so the
+    # cut is not coincident with it.
+    for c in getattr(plan, "cones", []):
+        from shapely.geometry import Polygon as _CPoly
+        sz = c.surface_z
+        sz = float(sz) if sz is not None else (L if c.from_top else 0.0)
+        slope = (c.r_mouth - c.r_far) / max(c.depth, 1e-12)
+        ext = 1.0
+        r_end = max(c.r_far - slope * ext, 0.0) if c.through else c.r_far
+        if c.from_top:
+            z_end = sz - c.depth - (ext if c.through else 0.0)
+            prof = [(0.0, z_end)]
+            if r_end > 1e-9:
+                prof.append((r_end, z_end))
+            prof += [(c.r_mouth, sz), (c.r_mouth, sz + ext), (0.0, sz + ext)]
+        else:
+            z_end = sz + c.depth + (ext if c.through else 0.0)
+            prof = [(0.0, sz - ext), (c.r_mouth, sz - ext), (c.r_mouth, sz)]
+            if r_end > 1e-9:
+                prof.append((r_end, z_end))
+            prof.append((0.0, z_end))
+        tool = trimesh.creation.revolve(_CPoly(prof).exterior.coords,
+                                        sections=SECTIONS)
+        for (x, y) in c.positions:
+            t = tool.copy()
+            t.apply_translation([x, y, 0.0])
+            solid = solid.union(t) if c.additive else solid.difference(t)
+
     # apply fillets (convex, ~perpendicular blends) via corner-tool cuts;
     # FilletOps live in WORLD coordinates, this solid is in the PLAN
     # frame -- transform each op's geometry into the plan frame first

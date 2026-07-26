@@ -188,6 +188,110 @@ check("countersink body volume within 2%",
       f"{csbody.Shape.Volume:.2f} vs {cs_solid.Volume:.2f}")
 check("countersink body shape is valid", csbody.Shape.isValid())
 
+# --- PartDesign Hole feature (counterdrilled plate) -------------------------
+# drill (d5) through a 14 mm plate, a 90 deg taper opening out to d10, then a
+# 3 mm deep d10 bore up to the top face: HoleCutType = Counterdrill. There is
+# NO annular shoulder here -- the bore wall runs straight into the cone.
+cd_solid = Part.makeBox(40, 30, 14, App.Vector(-20, -15, 0)) \
+    .cut(Part.makeCylinder(2.5, 60, App.Vector(0, 0, -20))) \
+    .cut(Part.makeCone(2.5, 5.0, 2.5, App.Vector(0, 0, 8.5))) \
+    .cut(Part.makeCylinder(5.0, 3.5, App.Vector(0, 0, 11.0)))
+cdv, cdf = cd_solid.tessellate(0.05)
+cdtm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in cdv]),
+                       faces=np.array(cdf), process=True)
+cdrep = snap_report(reconstruct(cdtm)).report
+cdpatches = plan_patches(cdrep)
+cdfeats = detect_features(cdrep, cdpatches)
+cdplan = plan_history(cdrep, cdfeats, detect_patterns(cdfeats), cdpatches)
+cdcount = [h for h in cdplan.holes
+           if h.countersink_diameter and h.counterbore_diameter]
+check("counterdrill plan found a counterdrilled hole", len(cdcount) == 1,
+      f"{len(cdcount)} counterdrilled of {len(cdplan.holes)} holes")
+check("counterdrill did not leave a spurious bore hole",
+      len(cdplan.holes) == 1, f"{len(cdplan.holes)} holes planned")
+if cdcount:
+    from meshtofeatures.history import hole_op_properties
+    cdprops = hole_op_properties(cdcount[0])
+    check("counterdrill maps to HoleCutType Counterdrill",
+          cdprops["HoleCutType"] == "Counterdrill", cdprops["HoleCutType"])
+    check("counterdrill bore diameter ~10",
+          abs(cdprops["HoleCutDiameter"] - 10.0) < 0.3,
+          f"{cdprops['HoleCutDiameter']:.3f}")
+    check("counterdrill cut depth is the CYLINDRICAL part (~3)",
+          abs(cdprops["HoleCutDepth"] - 3.0) < 0.3,
+          f"{cdprops['HoleCutDepth']:.3f}")
+cdbody = build.build_body(doc, cdplan, name="RebuiltCounterdrill")
+cdholes = [o for o in cdbody.Group if o.TypeId == "PartDesign::Hole"]
+check("counterdrill body uses a PartDesign::Hole feature", bool(cdholes))
+# the enum string must be one OCC/PartDesign actually accepts -- if FreeCAD
+# rejected "Counterdrill" the property would still read its previous value
+check("PartDesign::Hole accepted the Counterdrill cut type",
+      any(getattr(o, "HoleCutType", "") == "Counterdrill" for o in cdholes),
+      ", ".join(str(getattr(o, "HoleCutType", "?")) for o in cdholes))
+check("counterdrill body volume within 2%",
+      abs(cdbody.Shape.Volume - cd_solid.Volume) / cd_solid.Volume < 0.02,
+      f"{cdbody.Shape.Volume:.2f} vs {cd_solid.Volume:.2f}")
+check("counterdrill body shape is valid", cdbody.Shape.isValid())
+
+# --- standalone conical pocket (SubtractiveCone primitive) ------------------
+# an r8 -> r3 truncated conical recess, 5 mm deep, in a 12 mm plate
+cp_solid = Part.makeBox(50, 40, 12, App.Vector(-25, -20, 0)) \
+    .cut(Part.makeCone(3.0, 8.0, 5.0, App.Vector(0, 0, 7.0)))
+cpv, cpf = cp_solid.tessellate(0.05)
+cptm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in cpv]),
+                       faces=np.array(cpf), process=True)
+cprep = snap_report(reconstruct(cptm)).report
+cppatches = plan_patches(cprep)
+cpfeats = detect_features(cprep, cppatches)
+cpplan = plan_history(cprep, cpfeats, detect_patterns(cpfeats), cppatches)
+check("conical pocket planned as a ConeOp", len(cpplan.cones) == 1,
+      f"{len(cpplan.cones)} cones, {len(cpplan.pockets)} pockets")
+check("conical pocket did not also emit a terrace pocket",
+      cpplan.pockets == [], f"{len(cpplan.pockets)} pockets")
+if cpplan.cones:
+    _c = cpplan.cones[0]
+    check("conical pocket radii recovered",
+          abs(_c.r_mouth - 8.0) < 0.2 and abs(_c.r_far - 3.0) < 0.2,
+          f"r_mouth {_c.r_mouth:.3f}, r_far {_c.r_far:.3f}")
+cpbody = build.build_body(doc, cpplan, name="RebuiltConicalPocket")
+check("conical pocket body uses a SubtractiveCone primitive",
+      any(o.TypeId == "PartDesign::SubtractiveCone" for o in cpbody.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in cpbody.Group})))
+check("conical pocket body volume within 2%",
+      abs(cpbody.Shape.Volume - cp_solid.Volume) / cp_solid.Volume < 0.02,
+      f"{cpbody.Shape.Volume:.2f} vs {cp_solid.Volume:.2f}")
+check("conical pocket body shape is valid", cpbody.Shape.isValid())
+
+# --- BOTTOM-face countersink: the pocket-fallback taper ---------------------
+# A countersink that opens on the bottom face cannot use PartDesign::Hole
+# (flipped sketches misbehave), so the executor falls back to pockets. That
+# path cut cylinders only and silently dropped the cone; it now cuts the
+# taper as a SubtractiveCone. The volume check is what verifies it -- a cone
+# built the wrong way round would remove visibly the wrong amount.
+bcs_solid = Part.makeBox(40, 30, 5, App.Vector(-20, -15, 0)) \
+    .cut(Part.makeCylinder(2.5, 50, App.Vector(0, 0, -20))) \
+    .cut(Part.makeCone(5.0, 2.5, 2.5, App.Vector(0, 0, 0)))
+bcsv, bcsf = bcs_solid.tessellate(0.05)
+bcstm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in bcsv]),
+                        faces=np.array(bcsf), process=True)
+bcsrep = snap_report(reconstruct(bcstm)).report
+bcspatches = plan_patches(bcsrep)
+bcsfeats = detect_features(bcsrep, bcspatches)
+bcsplan = plan_history(bcsrep, bcsfeats, detect_patterns(bcsfeats),
+                       bcspatches)
+bcsholes = [h for h in bcsplan.holes if h.countersink_diameter]
+check("bottom countersink planned from the bottom face",
+      bool(bcsholes) and bcsholes[0].from_top is False,
+      f"{len(bcsholes)} countersunk holes")
+bcsbody = build.build_body(doc, bcsplan, name="RebuiltBottomCountersink")
+check("bottom countersink cut its taper as a SubtractiveCone",
+      any(o.TypeId == "PartDesign::SubtractiveCone" for o in bcsbody.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in bcsbody.Group})))
+check("bottom countersink body volume within 2%",
+      abs(bcsbody.Shape.Volume - bcs_solid.Volume) / bcs_solid.Volume < 0.02,
+      f"{bcsbody.Shape.Volume:.2f} vs {bcs_solid.Volume:.2f}")
+check("bottom countersink body shape is valid", bcsbody.Shape.isValid())
+
 # --- horizontal fillets rebuilt as PartDesign::Fillet ------------------------
 fp = Part.makeBox(40, 30, 10, App.Vector(-20, -15, 0))
 top_edges = [e for e in fp.Edges

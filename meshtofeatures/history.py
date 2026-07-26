@@ -238,9 +238,11 @@ class HoleOp:
     counterbore_diameter: float | None = None
     counterbore_depth: float | None = None
     #: countersink (conical entry): the mouth diameter and the included
-    #: (full tip) angle in DEGREES. A hole carries at most one of a
-    #: counterbore or a countersink (a counterdrill -- both -- is not yet
-    #: emitted). ``countersink_angle`` defaults the executor to 90 deg.
+    #: (full tip) angle in DEGREES. When BOTH a countersink and a
+    #: counterbore are set the hole is a counterdrill -- a cylindrical
+    #: recess with a conical transition down to the drill -- and
+    #: ``counterbore_depth`` is the CYLINDRICAL part only.
+    #: ``countersink_angle`` defaults the executor to 90 deg.
     countersink_diameter: float | None = None
     countersink_angle: float | None = None
     #: blind depth / counterbore measured from the top face (z = length)
@@ -373,6 +375,32 @@ class CrossHoleOp:
 
 
 @dataclass
+class ConeOp:
+    """A conical recess (or stud) revolved about a frame-z axis.
+
+    Rebuilt by the executor as a placed ``PartDesign::SubtractiveCone``
+    (or ``AdditiveCone``) primitive: ``Radius1`` at the base, ``Radius2``
+    at the top, ``Height`` along the axis. A primitive is preferred over a
+    tapered pocket (whose taper SIGN is a convention to get wrong) and over
+    a sketch-and-revolve (which needs a closed profile wire).
+
+    ``r_mouth`` is the radius at the opening face, ``r_far`` the radius at
+    the far end (0 for a recess running to a point), and ``depth`` the
+    axial distance between them. ``surface_z`` is the frame-z of the
+    opening face, as for HoleOp.
+    """
+    r_mouth: float
+    r_far: float
+    depth: float
+    positions: list                 # [(x, y), ...] in the plan frame
+    from_top: bool = True
+    additive: bool = False
+    through: bool = False
+    surface_z: float | None = None
+    label: str = ""
+
+
+@dataclass
 class BuildPlan:
     frame_origin: np.ndarray
     frame_x: np.ndarray
@@ -385,6 +413,7 @@ class BuildPlan:
     fillets: list[FilletOp] = field(default_factory=list)
     chamfers: list[ChamferOp] = field(default_factory=list)
     cross_holes: list[CrossHoleOp] = field(default_factory=list)
+    cones: list[ConeOp] = field(default_factory=list)
     absorbed_features: int = 0
     unplanned: list[str] = field(default_factory=list)
     #: labels of PocketOps synthesized from exposed multi-level tops
@@ -410,11 +439,19 @@ def hole_op_properties(op: HoleOp) -> dict:
     }
     if not op.through:
         props["Depth"] = float(op.depth)
-    if op.countersink_diameter:
+    if op.countersink_diameter and op.counterbore_diameter:
+        # a counterdrill: a cylindrical recess with a conical transition
+        # down to the drill. PartDesign::Hole takes the BORE diameter, the
+        # depth of the CYLINDRICAL part only (the cone below it is fixed by
+        # the angle and the two diameters), and the included angle.
+        props["HoleCutType"] = "Counterdrill"
+        props["HoleCutDiameter"] = float(op.counterbore_diameter)
+        props["HoleCutDepth"] = float(op.counterbore_depth)
+        props["HoleCutCountersinkAngle"] = float(op.countersink_angle or 90.0)
+    elif op.countersink_diameter:
         # a conical entry: PartDesign::Hole models it by the mouth diameter
         # plus the included angle (no depth -- the angle and the drill
-        # diameter fix the cone). Takes precedence over a counterbore; a
-        # counterdrill (both) is out of scope.
+        # diameter fix the cone).
         props["HoleCutType"] = "Countersink"
         props["HoleCutDiameter"] = float(op.countersink_diameter)
         props["HoleCutCountersinkAngle"] = float(op.countersink_angle or 90.0)
@@ -592,6 +629,13 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
                 fc = to2d(np.asarray(ff.params["position"], dtype=float))[0]
                 fr = 0.5 * float(ff.params.get("diameter", 0.0))
                 _drilled.append((fc, fr))
+            elif ff.kind == "cone_pocket" and "position" in ff.params:
+                # the mouth of a tapered through hole is cut by its own
+                # cone primitive; carving it into the base too would punch
+                # a STRAIGHT bore of the mouth radius clean through
+                fc = to2d(np.asarray(ff.params["position"], dtype=float))[0]
+                _drilled.append(
+                    (fc, float(ff.params.get("mouth_radius", 0.0))))
 
         def _is_drilled_hole(loop2) -> bool:
             c = loop2.mean(0)
@@ -614,6 +658,10 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
                                   hole_profiles=base_holes))
 
     # ---- features -> ops ----------------------------------------------------
+    #: surfaces that are a cone feature's own end faces -- excluded
+    #: from terrace synthesis (see the cone_pocket branch below)
+    _cone_faces: set[int] = set()
+
     def _aligned(f):
         return abs(float(np.asarray(f.params["axis"]) @ z)) > 0.999
 
@@ -763,6 +811,20 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
                 length=f.params["height"],
                 from_top=float(hvals.mean()) > plan.base.length / 2,
                 label=f.description))
+        elif f.kind == "cone_pocket" and _aligned(f):
+            plan.cones.append(ConeOp(
+                r_mouth=float(f.params["mouth_radius"]),
+                r_far=float(f.params["far_radius"]),
+                depth=float(f.params["depth"]),
+                positions=[_pos2d(f)],
+                from_top=_side(f),
+                additive=False,
+                through=bool(f.params.get("through", False)),
+                surface_z=_surface_z(f),
+                label=f.description))
+            # the floor disk is this cone's own end face: keep the terrace
+            # pass off it, or it also emits a straight-walled substitute
+            _cone_faces.update(f.surface_indices[2:])
         elif f.kind == "slot" and _aligned(f) and f.params.get("open"):
             # synthesize the closed notch profile: two lines + far arc +
             # a mouth-closing segment pushed OUTWARD so the cut clears the
@@ -871,7 +933,8 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
             plan.unplanned.append(f.description)
 
     _plan_lateral_pads(plan, report, z, x, y, origin, to2d, outer3d, consumed)
-    _plan_terraces(plan, report, members, z, x, y, origin, to2d, outer3d)
+    _plan_terraces(plan, report, members, z, x, y, origin, to2d, outer3d,
+                   skip=_cone_faces)
     # Decline heavily faceted / organic exports. Count the intermediate
     # horizontal member SEGMENTS (a tessellated curve is dozens of thin
     # horizontal facets); terraces coalesce disjoint facets so the emitted
@@ -1370,7 +1433,7 @@ def _footprint_polys(mesh, seg, to2d, tol):
 
 
 def _plan_terraces(plan, report, members, z, x_ax, y_ax, origin, to2d,
-                   base_outer3d):
+                   base_outer3d, skip=frozenset()):
     """Height-field terrace reconstruction of horizontal faces.
 
     Each intermediate member plane is cut to its OWN exact projected
@@ -1461,7 +1524,9 @@ def _plan_terraces(plan, report, members, z, x_ax, y_ax, origin, to2d,
                  else np.sum(hh < h - 2.0 * tol))
         return above > 0.5 * len(probes)
 
-    for _, s in members:
+    for _mi, s in members:
+        if _mi in skip:
+            continue                        # a cone feature's own floor
         h = float(s.fit.primitive.point @ z) - float(origin @ z)
         if h < tol or h > L - tol:
             continue                            # base bottom/top: not a cut

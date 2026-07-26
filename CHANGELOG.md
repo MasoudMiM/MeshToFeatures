@@ -2,11 +2,30 @@
 
 ## Unreleased
 
-Two new rebuilt feature types, plus a cone-fitting robustness fix that
+Four new rebuilt feature types, plus a cone-fitting robustness fix that
 made them possible.
 
 ### Added
 
+- **Conical pockets.** A concave cone that no drill or bore claims — a
+  tapered recess, a conical seat, a tapered through hole — is now
+  rebuilt as a placed `PartDesign::SubtractiveCone`. Handles truncated
+  and pointed recesses, through tapers, off-centre and rotated parts,
+  and top- and bottom-face machining. Previously the cone was fitted and
+  dropped, and the terrace pass substituted a straight-walled pocket
+  built from the floor loop — the right depth at the wrong radius, with
+  nothing reported as unplanned.
+
+- **Counterdrilled holes.** A hole carrying *both* a counterbore and a
+  countersink — a cylindrical recess with a conical transition down to
+  the drill — is now recognized as one feature and rebuilt as a
+  `PartDesign::Hole` with `HoleCutType = Counterdrill` (bore diameter,
+  the depth of the cylindrical part, and the included angle). Handles
+  through and blind holes, off-centre and rotated parts, grid patterns,
+  and top- and bottom-face machining. Previously the bore was dropped by
+  the countersink pass and re-emitted as a spurious blind hole of the
+  bore diameter, with the countersink's sketch plane placed on the bore
+  floor instead of the part face.
 - **Countersunk holes.** A concave cone capping a coaxial drilled
   cylinder is recognized as a countersink and rebuilt as a
   `PartDesign::Hole` with `HoleCutType = Countersink` (mouth diameter +
@@ -23,6 +42,11 @@ made them possible.
 
 ### Fixed
 
+- **Conical entries on the pocket-fallback path.** A countersunk or
+  counterdrilled hole that does not open on the outer top face (bottom
+  face, or a bore under a raised deck) is rebuilt by pocket cuts rather
+  than `PartDesign::Hole`. That path cut cylinders only, so the conical
+  entry was silently dropped; it is now cut as a `SubtractiveCone`.
 - **Cone fitting** could diverge or mis-select on short two-ring cone
   segments (tessellated countersinks): the half-angle parameter wandered
   along the periodic residual valley to a wrapped value the `(0, π/2)`
