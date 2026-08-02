@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 — 2026-08-02
 
 Four new rebuilt feature types, plus a cone-fitting robustness fix that
-made them possible.
+made them possible. This release also retires the *beta* label: the
+planner regressions found by the 25-part real-STL stress campaign are
+now fixed (spurious lateral pads, this release) or pinned as documented
+limitations with loud reporting.
 
 ### Added
 
@@ -42,6 +45,18 @@ made them possible.
 
 ### Fixed
 
+- **Spurious lateral pads on non-flange geometry** (stress-campaign
+  bucket 2). The lateral-pad hull assumes a prismatic convex protrusion;
+  a protruding face that surrounds a through-window (angle_block.STL's
+  leg), stacked protrusions sharing one outward direction, or the gap
+  between disjoint bodies were silently hulled into invented material.
+  Every lateral pad is now verified against the source mesh after
+  planning (hull interior must agree with the mesh once planned cuts are
+  subtracted); unsupported pads are dropped with a loud `unplanned`
+  report instead of silently overfilling the part. Genuine flanges --
+  including ones whose hulls are legitimately emptied by sub-level
+  pockets (featuretype.STL) and thin mesh-true edge lands
+  (octagonal_pocket.stl) -- are untouched.
 - **Conical entries on the pocket-fallback path.** A countersunk or
   counterdrilled hole that does not open on the outer top face (bottom
   face, or a bore under a raised deck) is rebuilt by pocket cuts rather
@@ -65,11 +80,14 @@ made them possible.
 
 ### Tests
 
-- Suite grows from 318 to 379 (all passing), including countersink
+- Suite grows from 318 to 452 passing (one expected failure documents
+  a terrace-model limitation), including countersink
   detection/planning/property-mapping/round-trip, blind cross-hole
   planning and round-trips, convex/concave cone recovery, and a
   network-guarded robustness pass over a real machined part
-  (`featuretype.STL`).
+  (`featuretype.STL`), plus non-prismatic-protrusion veto fixtures
+  (windowed flange, stacked rails) and network-guarded
+  angle_block/octagonal_pocket false-positive pins.
 
 ## 0.16.0 (beta) — 2026-07-11
 

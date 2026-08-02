@@ -99,3 +99,33 @@ class TestFeatureTypeStl:
                 assert ch.depth is not None and ch.depth > 0
                 d = np.asarray(ch.entry_direction, dtype=float)
                 assert np.isclose(np.linalg.norm(d), 1.0, atol=1e-6)
+
+
+class TestBucket2LateralFalsePositives:
+    """Stress-campaign bucket 2: the lateral-pad detector false-fired on
+    non-flange geometry (angle_block, octagonal_pocket, box, multibody,
+    shared each gained a spurious pad). The mesh-agreement veto (design
+    note 49) must drop the unsupported hulls LOUDLY -- and must NOT eat
+    the pads that are mesh-true (octagonal_pocket's chamfered edge land,
+    featuretype's genuine flange, covered elsewhere in this file)."""
+
+    def test_angle_block_pad_is_vetoed_loudly(self):
+        # the leg's front land surrounds a through-window; the hull papers
+        # over it (24% of the hulled volume is air)
+        mesh = _load("angle_block.STL")
+        _, _, plan = _full(mesh)
+        lateral = [p for p in plan.pads
+                   if getattr(p, "axis", None) is not None]
+        assert lateral == [], "spurious lateral pad emitted on angle_block"
+        assert any("Lateral" in s for s in plan.unplanned), \
+            "vetoed pad not reported in unplanned"
+
+    def test_octagonal_pocket_pad_is_kept(self):
+        # the thin chamfered edge land beyond the base outline IS mesh
+        # material (100% agreement): the veto must not over-tighten
+        mesh = _load("octagonal_pocket.stl")
+        _, _, plan = _full(mesh)
+        lateral = [p for p in plan.pads
+                   if getattr(p, "axis", None) is not None]
+        assert len(lateral) == 1
+        assert not any("Lateral" in s for s in plan.unplanned)

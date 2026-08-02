@@ -935,6 +935,7 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
     _plan_lateral_pads(plan, report, z, x, y, origin, to2d, outer3d, consumed)
     _plan_terraces(plan, report, members, z, x, y, origin, to2d, outer3d,
                    skip=_cone_faces)
+    _lateral_pad_mesh_veto(plan, report, x, y, z, origin, _tol)
     # Decline heavily faceted / organic exports. Count the intermediate
     # horizontal member SEGMENTS (a tessellated curve is dozens of thin
     # horizontal facets); terraces coalesce disjoint facets so the emitted
@@ -1391,6 +1392,157 @@ def _emit_lateral_pad(plan, report, origin, x, y, z, u, v, a,
         length=length, axis=a_pf, plane_origin=min_axis * a_pf,
         plane_u=u_pf, plane_v=v_pf,
         label=f"Lateral pad (depth {depth:g})"))
+
+
+def _lateral_pad_mesh_veto(plan, report, x, y, z, origin, tol,
+                           min_support=0.98, n_grid=12, n_stations=9):
+    """The mesh gets the veto (design note 5), applied to lateral pads.
+
+    A lateral pad's profile is the convex hull of every protruding point
+    in the plane perpendicular to its axis, extruded over the whole axis
+    window. That is only correct when the protrusion is PRISMATIC and
+    CONVEX along the axis. A protruding face that surrounds a
+    through-window (angle_block.STL's leg), two protrusions at different
+    depths sharing one outward direction (which the interval merge hulls
+    together), or the gap between disjoint bodies (multibody.stl) are all
+    hulled into material the part does not have -- silently, which
+    violates the loud-failure doctrine (stress-campaign bucket 2).
+
+    So every emitted lateral pad is checked against the source mesh:
+    at interior samples of its claimed volume (eroded off the boundary,
+    so tessellation chord error and snap shifts do not vote), the FINAL
+    plan's solidness -- the hull minus every planned cut that reaches the
+    sample (pockets, holes, cones, cross-holes) -- must AGREE with
+    ``mesh.contains``. This is why the veto runs after all planning: the
+    sub-level pockets carved into a genuine flange's top
+    (featuretype.STL) legitimately empty part of its hull. Agreement is
+    two-sided on purpose: hulled air that no cut removes is invented
+    material, and a planned cut through volume the mesh says is solid is
+    a flange being carved away -- both mean the hull-plus-cuts model does
+    not describe this protrusion. Pads under ``min_support`` agreement
+    are dropped and reported in ``unplanned``; hand-built reports without
+    a mesh keep their pads (nothing to veto against).
+    """
+    if report.mesh is None:
+        return
+    from shapely.geometry import Point, Polygon
+
+    L = plan.base.length
+
+    def _cut_reaches(r):
+        """Does some planned cut remove plan-frame point r?
+
+        Bounding shapes + tol; boundary effects on either side are
+        absorbed by the near-surface leniency below.
+        """
+        rz = r[2]
+        for op in plan.pockets:
+            zlo, zhi = ((-tol, L + tol) if op.through
+                        else (L - op.depth - tol, L + tol) if op.from_top
+                        else (-tol, op.depth + tol))
+            if zlo <= rz <= zhi:
+                try:
+                    poly = Polygon([q for e in op.profile
+                                    for q in e.sample()]).buffer(tol)
+                    if poly.contains(Point(r[0], r[1])):
+                        return True
+                except Exception:               # noqa: BLE001 - odd profile
+                    pass
+        for op in plan.holes:
+            reach = op.depth + (op.counterbore_depth or 0.0)
+            zlo, zhi = ((-tol, L + tol) if op.through
+                        else (L - reach - tol, L + tol) if op.from_top
+                        else (-tol, reach + tol))
+            if not zlo <= rz <= zhi:
+                continue
+            rr = max(op.diameter, op.counterbore_diameter or 0.0,
+                     op.countersink_diameter or 0.0) / 2.0 + tol
+            if any((r[0] - px) ** 2 + (r[1] - py) ** 2 <= rr * rr
+                   for px, py in op.positions):
+                return True
+        for op in plan.cones:
+            if op.additive:
+                continue
+            zlo, zhi = ((-tol, L + tol) if op.through
+                        else (L - op.depth - tol, L + tol) if op.from_top
+                        else (-tol, op.depth + tol))
+            if not zlo <= rz <= zhi:
+                continue
+            rr = max(op.r_mouth, op.r_far) + tol
+            if any((r[0] - px) ** 2 + (r[1] - py) ** 2 <= rr * rr
+                   for px, py in op.positions):
+                return True
+        return False
+
+    def _cross_hole_forgiven(w):
+        """Cross-holes are carried in WORLD coordinates."""
+        for op in plan.cross_holes:
+            a = np.asarray(op.axis, dtype=float)
+            rr = op.diameter / 2.0 + tol
+            for p3 in op.positions3d:
+                rel = w - np.asarray(p3, dtype=float)
+                if float(np.linalg.norm(rel - float(rel @ a) * a)) <= rr:
+                    return True
+        return False
+
+    kept: list = []
+    for pad in plan.pads:
+        if pad.axis is None:
+            kept.append(pad)
+            continue
+        prof = pad.profile
+        if len(prof) == 1 and isinstance(prof[0], SketchCircle):
+            poly = Point(*prof[0].center).buffer(float(prof[0].radius),
+                                                 quad_segs=24)
+        else:
+            try:
+                poly = Polygon([q for e in prof for q in e.sample()]).buffer(0)
+            except Exception:                   # noqa: BLE001
+                kept.append(pad)
+                continue
+        shrunk = poly.buffer(-2.5 * tol)
+        if shrunk.is_empty:
+            kept.append(pad)                    # too thin to judge
+            continue
+        minu, minv, maxu, maxv = shrunk.bounds
+        pts_plan = []
+        ts = (0.06 + 0.88 * np.arange(n_stations) / max(n_stations - 1, 1)) \
+            * pad.length
+        for uu in np.linspace(minu, maxu, n_grid):
+            for vv in np.linspace(minv, maxv, n_grid):
+                if not shrunk.contains(Point(uu, vv)):
+                    continue
+                for t in ts:
+                    pts_plan.append(pad.plane_origin + uu * pad.plane_u
+                                    + vv * pad.plane_v + t * pad.axis)
+        if len(pts_plan) < 40:
+            kept.append(pad)                    # insufficient evidence
+            continue
+        P = np.asarray(pts_plan)
+        W = origin + P[:, 0:1] * x + P[:, 1:2] * y + P[:, 2:3] * z
+        try:
+            inside = report.mesh.contains(W)
+        except Exception:                       # noqa: BLE001 - mesh not
+            kept.append(pad)                    # queryable: cannot veto
+            continue
+        cut = np.array([_cut_reaches(P[i]) or _cross_hole_forgiven(W[i])
+                        for i in range(len(P))])
+        ok = (~cut) == inside                   # plan solidness == mesh
+        if not ok.all():
+            # near-surface leniency: snapping may shift a face by ~tol
+            import trimesh as _tm
+            bad = np.flatnonzero(~ok)
+            _, d, _ = _tm.proximity.closest_point(report.mesh, W[bad])
+            ok[bad[d < 2.5 * tol]] = True
+        support = float(ok.mean())
+        if support >= min_support:
+            kept.append(pad)
+        else:
+            plan.unplanned.append(
+                f"{pad.label}: {1.0 - support:.0%} of the hulled volume is "
+                f"not mesh material (windowed or non-prismatic lateral "
+                f"protrusion beyond the base outline), skipped")
+    plan.pads[:] = kept
 
 
 def _footprint_polys(mesh, seg, to2d, tol):

@@ -21,7 +21,7 @@ from .history import (BuildPlan, SketchArc, SketchCircle, SketchLine,
 from .standards import identify_metric
 from .segmentation import adaptive_angle_threshold, face_curvature, split_by_curvature
 
-__version__ = "0.16.0"
+__version__ = "0.17.0"
 __all__ = [
     "Plane", "Sphere", "Cylinder", "Cone", "Primitive",
     "FitResult", "fit_plane", "fit_sphere", "fit_cylinder", "fit_cone", "fit_best",

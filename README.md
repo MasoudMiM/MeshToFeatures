@@ -3,9 +3,9 @@
 **A FreeCAD workbench that reverse-engineers STL meshes of prismatic parts
 into editable PartDesign bodies.**
 
-> **Status: beta (0.16.x).** The pipeline is well tested on machined-style
-> prismatic parts, but this is a first public release — expect rough edges.
-> Bug reports with the offending STL attached are very welcome.
+> **Status: 0.17.x.** The pipeline is well tested on machined-style
+> prismatic parts — see the limitations section for what it does not
+> attempt. Bug reports with the offending STL attached are very welcome.
 
 Point it at a triangle mesh of a plate-like machined part and it will:
 
@@ -22,7 +22,7 @@ Point it at a triangle mesh of a plate-like machined part and it will:
 
 ## Capabilities
 
-Recognized and rebuilt on the current beta:
+Recognized and rebuilt on the current release:
 
 - **Base solid** from the part footprint (arbitrary polygonal outline,
   including interior cutouts), on parts in any orientation (the working
@@ -138,7 +138,7 @@ meshtofeatures/          geometry core (FreeCAD-free: numpy/scipy/
 freecad/meshtofeatures_wb/  the FreeCAD workbench: commands, task
                          panel, and the PartDesign executor
 scripts/                 headless diagnostics (probe)
-tests/                   pytest suite (300+ tests, runs without FreeCAD)
+tests/                   pytest suite (450+ tests, runs without FreeCAD)
 docs/                    design notes, development history, verification
 ```
 

@@ -378,3 +378,77 @@ class TestLateralPadRightHanded:
             det = float(np.linalg.det(
                 np.column_stack([pad.plane_u, pad.plane_v, pad.axis])))
             assert det > 0.5, f"left-handed pad basis (det={det:.2f})"
+
+
+# ---------------------------------------------------- non-prismatic hulls
+
+def windowed_flange_plate():
+    """Base 40x30x10 (z in [0,10]) with a full-width flange off the -y
+    wall (y[-20,-15], z[1,9]) carrying a rectangular THROUGH-window
+    (x[-10,10], z[3,7]). The pad hull cannot represent the window: the
+    convex hull of the protruding points papers over it and invents
+    material where the part has a hole -- the angle_block.STL failure
+    (its leg's front land surrounds a through-window) in miniature."""
+    base = trimesh.creation.box(extents=[40, 30, 10])
+    base.apply_translation([0, 0, 5])
+    fl = trimesh.creation.box(extents=[40, 5, 8])
+    fl.apply_translation([0, -17.5, 5])                   # y[-20,-15] z[1,9]
+    win = trimesh.creation.box(extents=[20, 7, 4])
+    win.apply_translation([0, -17.5, 5])                  # x[-10,10] z[3,7]
+    return base.union(fl.difference(win))
+
+
+def stacked_rails_plate():
+    """Base 40x30x10 (z in [0,10]) with TWO full-width protrusions on the
+    -y wall at different depths and heights: a deep low rail (y[-22,-15],
+    z[1,3]) and a shallow high lug (y[-18,-15], z[6,9]). They share the
+    outward direction and overlap in axis span, so the detector merges
+    them into ONE hull whose cross-section bridges the air between them
+    -- the non-convex-cross-section failure of the corpus stress run."""
+    base = trimesh.creation.box(extents=[40, 30, 10])
+    base.apply_translation([0, 0, 5])
+    rail = trimesh.creation.box(extents=[40, 7, 2])
+    rail.apply_translation([0, -18.5, 2])                 # y[-22,-15] z[1,3]
+    lug = trimesh.creation.box(extents=[40, 3, 3])
+    lug.apply_translation([0, -16.5, 7.5])                # y[-18,-15] z[6,9]
+    return base.union(rail).union(lug)
+
+
+class TestNonPrismaticProtrusionVeto:
+    """The mesh gets the veto (design note 5), applied to lateral pads.
+
+    A lateral pad's hull profile is only correct when the protrusion is
+    prismatic and convex along the pad axis. When it is not, the planner
+    must NOT invent material: either the emitted pad matches the mesh, or
+    the pad is dropped with a loud unplanned entry -- never a silent
+    overfill (bucket 2 of the 25-part stress campaign: angle_block,
+    octagonal_pocket, box, multibody, shared each gained a spurious pad).
+    """
+
+    @pytest.mark.parametrize("factory", [windowed_flange_plate,
+                                         stacked_rails_plate])
+    def test_no_invented_material_or_loud_drop(self, factory):
+        mesh = factory()
+        _, _, plan = _plan(mesh)
+        lateral = [p for p in plan.pads
+                   if getattr(p, "axis", None) is not None]
+        if lateral:
+            # if the planner claims to model the protrusion, it must match
+            assert_geometry_match(mesh, plan)
+        else:
+            # dropped: must be loud...
+            assert any("lateral" in s.lower() for s in plan.unplanned), \
+                f"vetoed pad not reported: unplanned={plan.unplanned}"
+            # ...and the rebuild must not exceed the part (no invention)
+            reb = _to_world(plan, _rebuild_mesh(plan))
+            assert reb.volume <= mesh.volume * 1.01
+
+    @pytest.mark.parametrize("factory", [flanged_plate, gusseted_bracket,
+                                         two_lug_plate, horizontal_boss,
+                                         rounded_rail])
+    def test_genuine_pads_survive_the_veto(self, factory):
+        # the veto must not eat the true fixtures this suite pins
+        _, _, plan = _plan(factory())
+        pads = [p for p in plan.pads if getattr(p, "axis", None) is not None]
+        assert pads, "genuine lateral pad vetoed away"
+        assert plan.unplanned == []

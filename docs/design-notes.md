@@ -601,6 +601,33 @@ v0.15.6 (lateral pads):
     the opening face for a plain countersink and the BORE FLOOR when a
     counterbore sits above it.
 
+49. **Lateral pads get the mesh veto** (unreleased). Note 36's pad profile
+    is the convex hull of every protruding point in the plane perpendicular
+    to the pad axis, extruded over the merged axis window — only correct
+    when the protrusion is PRISMATIC and CONVEX along that axis. The 25-part
+    stress campaign's bucket 2 was this assumption failing silently: a
+    protruding face that surrounds a through-window (angle_block's leg) is
+    hulled shut; two protrusions at different depths sharing one outward
+    direction (stress fixtures; the interval merge sees one span) are hulled
+    into a bridge; the gap between disjoint bodies (multibody) becomes
+    material. So note 5 is applied to pads: at eroded interior samples of
+    the hull volume (2.5·tol off every boundary, so chord error and snap
+    shifts do not vote), the FINAL plan's solidness — hull minus every
+    planned cut reaching the sample — must agree with `mesh.contains` on
+    ≥98%. Agreement is judged AFTER all planning and two-sided on purpose:
+    a genuine flange's hull is legitimately emptied by the sub-level
+    pockets carved into it (featuretype), while a planned cut through
+    volume the mesh says is solid is the flange being carved away — a
+    one-way "will some cut remove this air?" test was tried first and
+    defeated by bogus terrace cuts forgiving the hull's air. Failing pads
+    are dropped LOUDLY into `unplanned` (note 35's doctrine); reports
+    without a mesh keep their pads. Field result: angle_block loses its
+    spurious pad (volume error 11.9% → the pre-existing 5.8% taper
+    residual), multibody loses its bridge, while octagonal_pocket's thin
+    chamfered edge land (100% agreement, and volumetrically REAL — the
+    campaign's +3.5% claim was the thin-part volume-ratio artifact of
+    bucket 3) and featuretype's flange survive untouched.
+
 ## Run tests
 
 ```
