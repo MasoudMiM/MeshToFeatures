@@ -8,9 +8,9 @@
   <maintainer email="fem.studio@pm.me">Masoud Masoumi</maintainer>
   <icon>freecad/meshtofeatures_wb/resources/meshtofeatures.svg</icon>
   <url type="repository" branch="main">https://github.com/MasoudMiM/MeshToFeatures</url>
-  <url type="readme">https://github.com/MasoudMiM/MeshToFeatures/blob/main/README.md</url>
+  <url type="readme">https://github.com/MasoudMiM/MeshToFeatures/raw/main/README.md</url>
   <url type="bugtracker">https://github.com/MasoudMiM/MeshToFeatures/issues</url>
-  <freecadmin>1.0</freecadmin>
+  <freecadmin>1.1.0</freecadmin>
   <depend type="python">numpy</depend>
   <depend type="python">scipy</depend>
   <depend type="python">trimesh</depend>
