@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.17.1 — 2026-08-05
+
+Repository restructure requested by the FreeCAD addon-index review
+(FreeCAD/Addons#108): nothing but metadata files may live at the addon's
+top level, because FreeCAD puts the addon directory itself on
+`sys.path` — a top-level `tests/` (or `scripts/`, or the core package)
+becomes globally importable and collides with every other addon.
+
+### Changed
+
+- The geometry core moved from top-level `meshtofeatures/` to
+  `freecad/meshtofeatures_wb/core/` (the `lib/`-subpackage pattern used
+  by CurvesWB). Its import path is now
+  `freecad.meshtofeatures_wb.core.*`; the modules themselves are
+  unchanged (the core already used only relative imports internally).
+- `tests/`, `scripts/`, and `docs/` moved under
+  `freecad/meshtofeatures_wb/` as well; run the suite with
+  `python -m pytest freecad/meshtofeatures_wb/tests/ -q` (or plain
+  `pytest`, via `testpaths`).
+- `package.xml`: `freecadmin` raised to 1.1.0 and the readme URL now
+  serves the raw file (merged upstream from the addon review).
+- The headless scripts re-extend the `freecad` namespace after putting
+  the checkout on `sys.path`, since `freecadcmd` imports FreeCAD's own
+  `freecad` package before the script runs.
+
 ## 0.17.0 — 2026-08-02
 
 Four new rebuilt feature types, plus a cone-fitting robustness fix that

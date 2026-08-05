@@ -27,12 +27,12 @@ from PySide import QtCore, QtWidgets  # type: ignore  # FreeCAD's Qt shim
 def compute(tm, snap: bool, rebuild: bool, progress=None) -> dict:
     """Pure pipeline; safe on any thread. Returns everything the
     main-thread apply step needs."""
-    from meshtofeatures.pipeline import reconstruct
-    from meshtofeatures.snapping import snap_report
-    from meshtofeatures.emission import plan_patches
-    from meshtofeatures.features import detect_features
-    from meshtofeatures.patterns import detect_patterns
-    from meshtofeatures.history import plan_history
+    from .core.pipeline import reconstruct
+    from .core.snapping import snap_report
+    from .core.emission import plan_patches
+    from .core.features import detect_features
+    from .core.patterns import detect_patterns
+    from .core.history import plan_history
 
     def sub(lo, hi):
         return (lambda s, f: progress(s, lo + (hi - lo) * f)) if progress else None

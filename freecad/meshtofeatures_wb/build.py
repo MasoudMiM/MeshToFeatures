@@ -14,10 +14,10 @@ import math
 import FreeCAD as App  # type: ignore
 import Part  # type: ignore
 
-from meshtofeatures.history import (BuildPlan, SketchArc, SketchCircle,
+from .core.history import (BuildPlan, SketchArc, SketchCircle,
                                SketchLine, fillet_edge_matches,
                                hole_op_properties)
-from meshtofeatures.fitting import _axis_frame
+from .core.fitting import _axis_frame
 
 
 def _placement(plan: BuildPlan, z_offset: float,
@@ -42,7 +42,7 @@ def _mirror_y(prims):
     """Mirror 2D profile primitives across the x-axis (for flipped
     sketch planes): y coordinates negate, arc sweeps flip sign."""
     import numpy as np
-    from meshtofeatures.history import SketchArc, SketchCircle, SketchLine
+    from .core.history import SketchArc, SketchCircle, SketchLine
     out = []
     for p in prims:
         if isinstance(p, SketchLine):
@@ -286,7 +286,7 @@ def _lateral_pad(doc, body, plan, pad, k):
     the DEFAULT +normal extrusion is correct); no Reversed/Midplane, per
     the doctrine that direction booleans are unreliable on FreeCAD 1.1.
     """
-    from meshtofeatures.history import lateral_pad_world_frame
+    from .core.history import lateral_pad_world_frame
     origin, u, v, axis = lateral_pad_world_frame(plan, pad)
     m = App.Matrix(
         float(u[0]), float(v[0]), float(axis[0]), float(origin[0]),

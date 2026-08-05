@@ -43,11 +43,11 @@ def _run(snap: bool) -> None:
             ui.run_async(mesh_obj, snap=snap, rebuild=False)
         return
 
-    from meshtofeatures.pipeline import reconstruct
-    from meshtofeatures.snapping import snap_report
-    from meshtofeatures.emission import plan_patches
-    from meshtofeatures.features import detect_features
-    from meshtofeatures.patterns import detect_patterns
+    from .core.pipeline import reconstruct
+    from .core.snapping import snap_report
+    from .core.emission import plan_patches
+    from .core.features import detect_features
+    from .core.patterns import detect_patterns
     from . import emit
 
     doc = App.ActiveDocument or App.newDocument("Reconstruction")
@@ -142,12 +142,12 @@ class RebuildBody(_BaseCommand):
                 for mesh_obj in _selected_mesh_objects():
                     ui.run_async(mesh_obj, snap=True, rebuild=True)
                 return
-            from meshtofeatures.pipeline import reconstruct
-            from meshtofeatures.snapping import snap_report
-            from meshtofeatures.emission import plan_patches
-            from meshtofeatures.features import detect_features
-            from meshtofeatures.patterns import detect_patterns
-            from meshtofeatures.history import plan_history
+            from .core.pipeline import reconstruct
+            from .core.snapping import snap_report
+            from .core.emission import plan_patches
+            from .core.features import detect_features
+            from .core.patterns import detect_patterns
+            from .core.history import plan_history
             from . import build, emit
             doc = App.ActiveDocument or App.newDocument("Rebuilt")
             for mesh_obj in _selected_mesh_objects():

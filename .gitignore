@@ -7,4 +7,4 @@ build/
 .vscode/
 .idea/
 *.FCStd.bak
-docs/dev-history.md
+freecad/meshtofeatures_wb/docs/dev-history.md

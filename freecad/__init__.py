@@ -5,5 +5,5 @@
 # namespace. Without extend_path, whichever `freecad/` directory Python
 # finds first SHADOWS all others -- in practice our Mod directory wins and
 # FreeCAD's own `from freecad import module_io` breaks, killing file
-# import for the whole application. See tests/test_namespace.py.
+# import for the whole application. See meshtofeatures_wb/tests/test_namespace.py.
 __path__ = __import__("pkgutil").extend_path(__path__, __name__)

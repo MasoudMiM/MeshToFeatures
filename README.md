@@ -54,7 +54,7 @@ Recognized and rebuilt on the current release:
   features are retried, deferred to the end of the build, and — only if
   unrecoverable — skipped with a loud, named report instead of silently
   degrading the part.
-- **Diagnostics**: `scripts/probe_bore_placement.py` runs the full
+- **Diagnostics**: `freecad/meshtofeatures_wb/scripts/probe_bore_placement.py` runs the full
   pipeline headlessly inside FreeCAD's Python console and prints
   quantitative per-feature checks (useful when reporting bugs).
 
@@ -90,7 +90,7 @@ Python interpreter** (not just your system Python):
 numpy scipy trimesh shapely
 ```
 
-See [docs/VERIFY.md](docs/VERIFY.md) for per-platform instructions and a
+See [docs/VERIFY.md](freecad/meshtofeatures_wb/docs/VERIFY.md) for per-platform instructions and a
 verification checklist.
 
 ### 2. The workbench
@@ -132,14 +132,14 @@ modules for the whole session).
 ## Project layout
 
 ```
-meshtofeatures/          geometry core (FreeCAD-free: numpy/scipy/
-                         trimesh/shapely) — fitting, segmentation,
-                         snapping, feature detection, build planning
-freecad/meshtofeatures_wb/  the FreeCAD workbench: commands, task
-                         panel, and the PartDesign executor
-scripts/                 headless diagnostics (probe)
-tests/                   pytest suite (450+ tests, runs without FreeCAD)
-docs/                    design notes, development history, verification
+freecad/meshtofeatures_wb/   the FreeCAD workbench: commands, task
+                             panel, and the PartDesign executor
+  core/                      geometry core (FreeCAD-free: numpy/scipy/
+                             trimesh/shapely) — fitting, segmentation,
+                             snapping, feature detection, build planning
+  scripts/                   headless diagnostics (probe + smoke test)
+  tests/                     pytest suite (450+ tests, runs without FreeCAD)
+  docs/                      design notes + verification guide
 ```
 
 The core is deliberately FreeCAD-free so the entire planning pipeline is
@@ -149,7 +149,7 @@ unit-testable anywhere; only the thin executor layer touches FreeCAD.
 
 ```bash
 pip install numpy scipy trimesh shapely manifold3d mapbox-earcut rtree pytest
-python -m pytest tests/ -q
+python -m pytest freecad/meshtofeatures_wb/tests/ -q
 ```
 
 ## Contributing & bug reports
