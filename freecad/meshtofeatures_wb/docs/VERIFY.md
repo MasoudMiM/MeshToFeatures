@@ -7,16 +7,30 @@ FreeCAD itself -- follow this checklist once per FreeCAD version.
 ## 1. Install Python dependencies into FreeCAD's interpreter
 
 Find FreeCAD's Python (GUI: Python console -> `import sys; sys.executable`),
-then:
+then install the runtime set (rtree is a spatial index that some trimesh
+versions require):
 
-    <freecad-python> -m pip install numpy scipy trimesh
+    <freecad-python> -m pip install numpy scipy trimesh shapely rtree
+
+To also run the pytest suite inside that interpreter, add the
+test-only packages (boolean fixture construction + triangulation):
+
+    <freecad-python> -m pip install manifold3d mapbox-earcut pytest
 
 (AppImage/snap users: use the bundled `pip` module the same way.)
 
+Flatpak installs are sandboxed -- run pip through the flatpak instead
+(thanks @kizzard, #3):
+
+    flatpak run --command=python3 org.freecad.FreeCAD -m pip install --user numpy scipy trimesh shapely rtree manifold3d mapbox-earcut pytest
+
 ## 2. Link the addon into FreeCAD's Mod directory
 
-    # Linux (FreeCAD >= 1.1 uses version-scoped dirs; adjust as needed)
+    # Linux (FreeCAD >= 1.1 uses version-scoped dirs, e.g. .../FreeCAD/v1-1/Mod;
+    # check App.getUserAppDataDir() in the Python console, then adjust)
     ln -s /path/to/meshtofeatures ~/.local/share/FreeCAD/Mod/MeshToFeatures
+    # Flatpak
+    ln -s /path/to/meshtofeatures ~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/MeshToFeatures
     # Windows (admin PowerShell)
     New-Item -ItemType SymbolicLink -Path "$env:APPDATA\FreeCAD\Mod\MeshToFeatures" -Target "C:\path\to\meshtofeatures"
 
@@ -24,10 +38,20 @@ then:
 
     cd /path/to/meshtofeatures
     freecadcmd freecad/meshtofeatures_wb/scripts/freecad_smoke_test.py
+    # Flatpak
+    flatpak run --command=FreeCADCmd org.freecad.FreeCAD freecad/meshtofeatures_wb/scripts/freecad_smoke_test.py
 
 Expected: every line `[PASS]`, ending in `ALL CHECKS PASSED`, and a saved
 `meshtofeatures_smoke.FCStd` you can open to see the reconstructed cylinder +
 caps overlay.
+
+Optionally, run the full pytest suite with FreeCAD's own interpreter to
+verify the geometry core against the exact numpy/scipy/trimesh versions
+FreeCAD ships:
+
+    <freecad-python> -m pytest freecad/meshtofeatures_wb/tests/ -q
+    # Flatpak
+    flatpak run --command=python3 org.freecad.FreeCAD -m pytest freecad/meshtofeatures_wb/tests/ -q
 
 Known things to watch for (please report which occur, with FreeCAD version):
 - [ ] `Part.Cone` rejecting `Radius = 0` (adapter places the reference

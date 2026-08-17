@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshtofeatures"
-version = "0.17.1"
+version = "0.17.2"
 description = "Reverse-engineer analytic surfaces from triangle meshes (geometry core of a FreeCAD reverse-engineering addon)"
 license = "LGPL-2.1-or-later"
 requires-python = ">=3.10"

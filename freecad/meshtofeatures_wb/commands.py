@@ -13,7 +13,7 @@ _ICON_DIR = os.path.join(os.path.dirname(__file__), "resources")
 
 def _missing_dependencies() -> list[str]:
     missing = []
-    for name in ("numpy", "scipy", "trimesh"):
+    for name in ("numpy", "scipy", "trimesh", "shapely"):
         try:
             __import__(name)
         except ImportError:
@@ -34,7 +34,10 @@ def _run(snap: bool) -> None:
         App.Console.PrintError(
             "[meshtofeatures] missing Python packages: " + ", ".join(missing)
             + ". Install them into FreeCAD's Python, e.g.:\n"
-            "    <FreeCAD python> -m pip install " + " ".join(missing) + "\n")
+            "    <FreeCAD python> -m pip install " + " ".join(missing)
+            + "\n  (Flatpak: flatpak run --command=python3 org.freecad.FreeCAD"
+            " -m pip install --user " + " ".join(missing) + ")\n"
+            "  See README 'Dependencies' for details.\n")
         return
 
     if App.GuiUp:

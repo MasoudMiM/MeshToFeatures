@@ -1529,11 +1529,18 @@ def _lateral_pad_mesh_veto(plan, report, x, y, z, origin, tol,
                         for i in range(len(P))])
         ok = (~cut) == inside                   # plan solidness == mesh
         if not ok.all():
-            # near-surface leniency: snapping may shift a face by ~tol
-            import trimesh as _tm
-            bad = np.flatnonzero(~ok)
-            _, d, _ = _tm.proximity.closest_point(report.mesh, W[bad])
-            ok[bad[d < 2.5 * tol]] = True
+            # near-surface leniency: snapping may shift a face by ~tol.
+            # Some trimesh versions need the optional rtree package for
+            # proximity queries; the leniency is belt-and-suspenders on
+            # top of the 2.5-tol erosion, so degrade to the strict
+            # verdict rather than failing the whole rebuild without it.
+            try:
+                import trimesh as _tm
+                bad = np.flatnonzero(~ok)
+                _, d, _ = _tm.proximity.closest_point(report.mesh, W[bad])
+                ok[bad[d < 2.5 * tol]] = True
+            except Exception:                   # noqa: BLE001
+                pass
         support = float(ok.mean())
         if support >= min_support:
             kept.append(pad)
