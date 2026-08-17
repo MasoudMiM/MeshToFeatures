@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.17.2 — 2026-08-16
+
+Dependency documentation and robustness release, prompted by a field
+report from a Flatpak user (#3, thanks @kizzard).
+
+### Fixed
+
+- The missing-dependency gate now checks `shapely` (a hard planning
+  dependency): with it absent, the rebuild command previously started
+  and failed mid-pipeline instead of naming the missing package up
+  front. The gate's message now includes the Flatpak install variant.
+- The lateral-pad veto's near-surface leniency no longer aborts the
+  rebuild on trimesh builds whose proximity queries need the optional
+  `rtree` package; without it the veto degrades to its strict verdict
+  (the 2.5-tol erosion already absorbs boundary noise).
+
+### Docs
+
+- README and VERIFY.md document the complete runtime dependency set
+  (now including `rtree`), the test-only extras (`manifold3d`,
+  `mapbox-earcut`, `pytest`), and Flatpak-specific pip/symlink/pytest/
+  smoke-test commands. VERIFY.md previously listed only
+  `numpy scipy trimesh`.
+- `requirements.txt` gains `rtree`.
+
 ## 0.17.1 — 2026-08-05
 
 Repository restructure requested by the FreeCAD addon-index review

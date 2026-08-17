@@ -87,11 +87,23 @@ The geometry core needs a few packages available **inside FreeCAD's
 Python interpreter** (not just your system Python):
 
 ```
-numpy scipy trimesh shapely
+numpy scipy trimesh shapely rtree
 ```
 
-See [docs/VERIFY.md](freecad/meshtofeatures_wb/docs/VERIFY.md) for per-platform instructions and a
-verification checklist.
+(`rtree` is a spatial index that some trimesh versions require at
+runtime.) The Addon Manager offers to install the declared dependencies,
+but sandboxed installs can prevent that — on **Flatpak**, install them
+through the flatpak's own Python instead:
+
+```
+flatpak run --command=python3 org.freecad.FreeCAD -m pip install --user numpy scipy trimesh shapely rtree
+```
+
+If a rebuild produces no PartDesign body, check the Report view first:
+missing packages are named there with the exact install command.
+
+See [docs/VERIFY.md](freecad/meshtofeatures_wb/docs/VERIFY.md) for per-platform instructions (including
+snap/AppImage and Flatpak paths) and a verification checklist.
 
 ### 2. The workbench
 
@@ -146,6 +158,10 @@ The core is deliberately FreeCAD-free so the entire planning pipeline is
 unit-testable anywhere; only the thin executor layer touches FreeCAD.
 
 ## Running the tests
+
+The suite needs the test-only extras `manifold3d`, `mapbox-earcut`, and
+`pytest` in addition to the runtime packages (`pip install -e .[dev]`
+provides everything).
 
 ```bash
 pip install numpy scipy trimesh shapely manifold3d mapbox-earcut rtree pytest
