@@ -16,8 +16,9 @@ import trimesh
 
 from .conditioning import condition_mesh
 from .fitting import FitResult, fit_best
-from .segmentation import (Segment, adaptive_angle_threshold, segment_mesh,
-                           split_by_curvature)
+from .segmentation import (Segment, adaptive_angle_threshold, build_segment,
+                           segment_mesh, split_by_channels, split_by_curvature,
+                           split_by_planes)
 
 __all__ = ["RecognizedSurface", "ReconstructionReport", "reconstruct"]
 
@@ -133,6 +134,38 @@ def reconstruct(
     # depth < max_refine_depth are re-split by curvature (tangent blends
     # have no sharp edges; curvature contrast is the only signal) and their
     # children re-enter the queue.
+    def _refine_split(seg: Segment) -> list[Segment]:
+        """Split a segment that failed (or compromised on) fitting.
+
+        Peel exactly-planar regions first (vertex-coplanar region growing):
+        tangent blends can chain flat faces into blobs whose curvature
+        proxy is continuous, so only exact planarity separates them. Then
+        peel straight-spine channels (constant-cross-section blend strips
+        whose normals share one great circle): curvature clustering chains
+        adjacent strips of equal radius into one blob, and only the spine
+        direction separates them. The unpeeled remainder -- and blobs that
+        peel nothing -- fall to the curvature split.
+        """
+        peeled, remainder = split_by_planes(
+            mesh, seg.face_indices,
+            cop_tol=2.0 * fit_tolerance, rms_gate=5.0 * fit_tolerance,
+            min_faces=min_faces)
+        channels, remainder = split_by_channels(
+            mesh, remainder, rms_gate=5.0 * fit_tolerance,
+            min_faces=min_faces)
+        peeled = list(peeled) + list(channels)
+        if peeled:
+            children = list(peeled)
+            if len(remainder) >= min_faces:
+                sub = split_by_curvature(mesh, remainder, refine_threshold,
+                                         min_faces=min_faces)
+                children.extend(sub if len(sub) > 1
+                                else [build_segment(mesh, remainder)])
+            if len(children) > 1:
+                return children
+        return split_by_curvature(mesh, seg.face_indices, refine_threshold,
+                                  min_faces=min_faces)
+
     queue: list[tuple[Segment, int]] = [
         (s, 0) for s in segment_mesh(mesh, angle_threshold=angle_threshold,
                                      min_faces=min_faces)
@@ -183,20 +216,29 @@ def reconstruct(
             # curvature split first; genuinely noisy meshes have
             # accept_rms >> 20 * fit_tolerance ratios too, but their
             # splits shatter and are refused, falling back to acceptance.
-            if refine and depth < max_refine_depth \
-                    and vertex_rms > 20.0 * fit_tolerance:
-                children = split_by_curvature(
-                    mesh, seg.face_indices, refine_threshold,
-                    min_faces=min_faces)
+            suspicious = vertex_rms > 20.0 * fit_tolerance
+            if refine and depth < max_refine_depth and suspicious:
+                children = _refine_split(seg)
                 if len(children) > 1:
                     queue.extend((c, depth + 1) for c in children)
                     continue
+            # A suspicious fit that refinement itself produced (depth >= 1)
+            # and can no longer split is a compromise over a blended or
+            # complex region -- report it honestly unrecognized rather than
+            # accept a mislabel (field: issue #5's corner bracket, whose
+            # peeled transition bands fitted as a vrms-0.9 "plane" and two
+            # shallow spheres, spawning a bogus terrace and a part-sized
+            # fillet). Depth-0 segments keep the noisy-mesh fallback: their
+            # splits shatter and are refused, so they are accepted above.
+            if suspicious and depth >= 1:
+                report.unrecognized.append(seg)
+                unrecognized_area += seg.area
+                continue
             report.surfaces.append(RecognizedSurface(segment=seg, fit=fit))
             recognized_area += seg.area
             continue
         if refine and depth < max_refine_depth:
-            children = split_by_curvature(
-                mesh, seg.face_indices, refine_threshold, min_faces=min_faces)
+            children = _refine_split(seg)
             if len(children) > 1:
                 queue.extend((c, depth + 1) for c in children)
                 continue

@@ -29,7 +29,7 @@ import trimesh
 
 __all__ = ["Segment", "segment_mesh", "build_segment",
            "adaptive_angle_threshold", "face_curvature",
-           "split_by_curvature"]
+           "split_by_curvature", "split_by_planes", "split_by_channels"]
 
 
 @dataclass
@@ -373,3 +373,329 @@ def split_by_curvature(
     out = [build_segment(mesh, g) for g in groups]
     out.sort(key=lambda s: s.area, reverse=True)
     return out
+
+
+def split_by_planes(
+    mesh: trimesh.Trimesh,
+    faces: np.ndarray,
+    cop_tol: float,
+    rms_gate: float,
+    min_faces: int = 1,
+) -> tuple[list[Segment], np.ndarray]:
+    """Peel exactly-planar sub-regions out of a segment that failed fitting.
+
+    Tangent blends can chain many FLAT faces into one blob whose curvature
+    proxy is continuous: vertex-rounding noise alone keeps flat faces'
+    per-edge curvature at and above ``k_floor``, so the curvature clusters
+    of :func:`split_by_curvature` chain into a single label and nothing
+    splits (field: issue #5's corner bracket, a 3038-face blob that was 98%
+    clean planes joined by 0.5-8 deg transition facets). Exact vertex
+    coplanarity does split it: CAD-export planes interpolate their vertices
+    to machine precision, while any bend -- however gentle -- lifts a vertex
+    off the neighbouring face's plane by far more than ``cop_tol``.
+
+    Merge rule: adjacent faces join one candidate when every vertex of each
+    lies within ``cop_tol`` of the other's own triangle plane. Each
+    candidate is then validated by a global plane fit: vertex rms <=
+    ``rms_gate`` and at least four unique vertices (a plane needs dof + 1
+    points; three interpolate any plane -- note 12). The pairwise test can
+    chain a gently curved surface into a candidate (each step locally flat),
+    so the global refit is load-bearing: accumulated drift fails it and the
+    whole candidate falls back to the remainder.
+
+    Returns ``(planes, remainder)``: the accepted planar segments (sorted by
+    area, largest first) and the face indices no plane claimed -- the caller
+    decides what to do with the remainder (curvature split or honest
+    non-recognition). A peel candidate must also be SIGNIFICANT -- at least
+    ``max(4, len(faces) // 400)`` faces -- because a failed blob's transition
+    regions scatter hundreds of tiny exactly-planar slivers (2-6 facets each);
+    peeling them would shatter the segment into primitive confetti instead of
+    a few coherent sub-surfaces, so sub-significant candidates stay in the
+    remainder. Refuses like :func:`split_by_curvature` when the peel still
+    shatters (many groups, tiny median): it returns ``([], faces)`` so the
+    caller falls back unchanged. Noisy meshes peel nothing: their planes are
+    not vertex-exact, so this degrades gracefully to today's behaviour.
+    """
+    faces = np.asarray(faces)
+    if len(faces) < 2:
+        return [], faces
+
+    pairs, _, _ = _internal_adjacency(mesh, faces)
+    remap = np.full(len(mesh.faces), -1, dtype=np.int64)
+    remap[faces] = np.arange(len(faces))
+
+    tri = mesh.triangles                                # (n_faces, 3, 3)
+    nrm = mesh.face_normals                             # (n_faces, 3)
+    uf = _UnionFind(len(faces))
+    if len(pairs):
+        fa, fb = pairs[:, 0], pairs[:, 1]
+        ok = np.linalg.norm(nrm[fa], axis=1) > 0.0
+        ok &= np.linalg.norm(nrm[fb], axis=1) > 0.0
+        # b's vertices vs a's plane, and a's vs b's (vectorized over pairs)
+        for src, dst in ((fa, fb), (fb, fa)):
+            v = tri[dst]                                # (e, 3, 3)
+            d = np.abs(np.einsum("eij,ej->ei",
+                                 v - tri[src][:, None, 0, :], nrm[src]))
+            ok &= d.max(axis=1) <= cop_tol
+        for a, b in pairs[ok]:
+            uf.union(int(remap[a]), int(remap[b]))
+
+    roots = np.fromiter((uf.find(i) for i in range(len(faces))), dtype=np.int64)
+    min_significant = max(4, len(faces) // 400)
+    peeled: list[Segment] = []
+    peeled_mask = np.zeros(len(faces), dtype=bool)
+    for root in np.unique(roots):
+        sel = np.flatnonzero(roots == root)
+        cf = faces[sel]
+        if len(cf) < min_significant:    # sliver confetti stays in the remainder
+            continue
+        vertex_ids = np.unique(mesh.faces[cf].ravel())
+        if len(vertex_ids) < 4:          # note 12: interpolation is not evidence
+            continue
+        pts = mesh.vertices[vertex_ids]
+        centroid = pts.mean(axis=0)
+        _, _, vt = np.linalg.svd(pts - centroid, full_matrices=False)
+        d = (pts - centroid) @ vt[-1]
+        if float(np.sqrt(np.mean(d * d))) > rms_gate:
+            continue
+        peeled_mask[sel] = True
+        peeled.append(build_segment(mesh, cf))
+
+    remainder = faces[~peeled_mask]
+    groups = len(peeled) + (1 if len(remainder) >= min_faces else 0)
+    if groups > 1:
+        sizes = np.array([len(s.face_indices) for s in peeled]
+                         + ([len(remainder)] if len(remainder) >= min_faces else []))
+        too_many = groups > max(16, len(faces) // 25)
+        too_small = float(np.median(sizes)) < 2.0
+        if too_many or too_small:
+            return [], faces
+    peeled.sort(key=lambda s: s.area, reverse=True)
+    return peeled, remainder
+
+
+def _circle_fit_2d(pts: np.ndarray) -> tuple[np.ndarray, float, float]:
+    """Kasa circle fit to 2D points; returns (center, radius, geometric
+    rms). Algebraic fit is exact on CAD-export vertices (they interpolate
+    the tessellated arc); the returned rms is the true radial residual the
+    caller gates on."""
+    x, y = pts[:, 0], pts[:, 1]
+    a = np.column_stack([x, y, np.ones(len(pts))])
+    sol, *_ = np.linalg.lstsq(a, x * x + y * y, rcond=None)
+    cx, cy = 0.5 * sol[0], 0.5 * sol[1]
+    r2 = sol[2] + cx * cx + cy * cy
+    if r2 <= 0.0:
+        return np.array([cx, cy]), 0.0, np.inf
+    r = float(np.sqrt(r2))
+    radial = np.abs(np.linalg.norm(pts - np.array([cx, cy]), axis=1) - r)
+    return np.array([cx, cy]), r, float(np.sqrt(np.mean(radial * radial)))
+
+
+def split_by_channels(
+    mesh: trimesh.Trimesh,
+    faces: np.ndarray,
+    rms_gate: float,
+    ang_tol: float = np.deg2rad(2.0),
+    min_faces: int = 1,
+) -> tuple[list[Segment], np.ndarray]:
+    """Peel straight-spine channel (generalized-cylinder) sub-regions out
+    of a segment that failed fitting.
+
+    A channel is a surface whose face normals are all perpendicular to one
+    common spine direction: constant-cross-section sweeps -- the blend
+    strip along a straight edge (a fillet band), a chamfer's neighbour, a
+    bent tab's curved wall. Tangent blends chain such strips with their
+    flat neighbours into blobs whose curvature proxy is CONTINUOUS (the
+    strip's 1/r equals its neighbour strip's 1/r when the radii match), so
+    neither the dihedral split nor the curvature split separates them; the
+    invariant that does is the spine DIRECTION, which jumps at every strip
+    junction. CAD-export channels are exact: their face normals lie on one
+    great circle (the plane perpendicular to the spine), so the test is a
+    vertex-exact one, like :func:`split_by_planes`.
+
+    Extraction is sequential: candidate spine directions come from pairs of
+    ADJACENT faces (consecutive channel facets rotate about the spine, so
+    the cross product of their normals points along it); each candidate
+    ``s`` collects the faces whose normal satisfies
+    ``|n . s| <= sin(ang_tol)``; each connected component of the inliers
+    is then validated by projecting its on-surface samples along ``s`` and
+    fitting a circle to the cross-section (a true channel projects exactly
+    onto its cross-section arc). Validated components are claimed and the
+    search repeats on the remainder.
+
+    Returns ``(channels, remainder)``: accepted channel segments (sorted
+    by area, largest first) and the unclaimed face indices. Refuses like
+    :func:`split_by_planes` when the peel shatters. Components that fail
+    validation stay in the remainder: bent spines (corner fillets, whose
+    normals do not share one great circle) and noisy meshes peel nothing,
+    degrading gracefully to today's behaviour.
+    """
+    faces = np.asarray(faces)
+    if len(faces) < 2:
+        return [], faces
+
+    pts = mesh.vertices[np.unique(mesh.faces[faces].ravel())]
+    diag = float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0)))
+    min_significant = max(4, len(faces) // 400)
+    sin_tol = float(np.sin(ang_tol))
+
+    nrm = mesh.face_normals[faces]
+    remap = np.full(len(mesh.faces), -1, dtype=np.int64)
+    remap[faces] = np.arange(len(faces))
+    max_candidates = 1000
+
+    claimed = np.zeros(len(faces), dtype=bool)    # became channel segments
+    excluded = np.zeros(len(faces), dtype=bool)   # searched, not channels
+    channels: list[Segment] = []
+
+    for _round in range(8):
+        avail = np.flatnonzero(~(claimed | excluded))
+        if len(avail) < min_significant:
+            break
+        # Candidate spines from ADJACENT face pairs: consecutive facets of
+        # a channel rotate about the spine, so the cross product of their
+        # normals points along it. This targets the search at surfaces that
+        # actually bend (a flat or noisy region proposes few distinct
+        # directions) instead of enumerating all pairs of distinct normals,
+        # which drowns the true spine when the blob carries many curved
+        # faces. Fully deterministic: candidates come in edge order.
+        sub_faces = faces[avail]
+        adj_pairs, adj_angles, _ = _internal_adjacency(mesh, sub_faces)
+        cands: list[np.ndarray] = []
+        seen: set[tuple] = set()
+        # Pairs must actually ROTATE (coplanar pairs carry no spine
+        # information), but the floor must stay far below the tessellation
+        # step: a finely chord-tessellated cylinder turns only ~0.1-1 deg
+        # per facet, and a 0.05-norm floor on the cross product silently
+        # drops every pair of it (field: an OCC 0.05-chord hole stack).
+        small = (adj_angles >= np.deg2rad(0.1)) & (adj_angles < np.deg2rad(45.0))
+        for fa, fb in adj_pairs[small]:
+            s = np.cross(nrm[remap[fa]], nrm[remap[fb]])
+            ns = float(np.linalg.norm(s))
+            if ns < 1e-9:
+                continue
+            s /= ns
+            key = tuple(np.round(s * np.sign(s[np.argmax(np.abs(s))]), 6))
+            if key not in seen:
+                seen.add(key)
+                cands.append(s)
+            if len(cands) >= max_candidates:
+                break
+        best_s, best_cnt, best_mask = None, 0, None
+        for s in cands:
+            m = np.abs(nrm @ s) <= sin_tol
+            cnt = int(np.count_nonzero(m & ~(claimed | excluded)))
+            if cnt > best_cnt:
+                best_s, best_cnt, best_mask = s, cnt, m
+        if best_s is None or best_cnt < min_significant:
+            break
+        # connected components of the inliers (within the unclaimed set)
+        inlier_local = np.flatnonzero(best_mask & ~(claimed | excluded))
+        sub_faces = faces[inlier_local]
+        pairs_adj, _, _ = _internal_adjacency(mesh, sub_faces)
+        sub_remap = np.full(len(mesh.faces), -1, dtype=np.int64)
+        sub_remap[sub_faces] = np.arange(len(sub_faces))
+        uf = _UnionFind(len(sub_faces))
+        for fa, fb in pairs_adj:
+            uf.union(int(sub_remap[fa]), int(sub_remap[fb]))
+        roots = np.fromiter((uf.find(i) for i in range(len(sub_faces))),
+                            dtype=np.int64)
+        # cross-section basis perpendicular to the spine
+        e = np.eye(3)[int(np.argmin(np.abs(best_s)))]
+        u = np.cross(e, best_s)
+        u /= np.linalg.norm(u)
+        v = np.cross(best_s, u)
+        found_any = False
+        for root in np.unique(roots):
+            sel = inlier_local[np.flatnonzero(roots == root)]
+            if len(sel) < min_significant:
+                continue
+            cf = faces[sel]
+            vertex_ids = np.unique(mesh.faces[cf].ravel())
+            if len(vertex_ids) < 6:
+                continue
+            # Fit the cross-section circle to ON-SURFACE SAMPLES, not just
+            # vertices: the corners of a planar rectangle are cocircular,
+            # so a flat slab wrap projects its vertices exactly onto a
+            # circle; its face centroids do not lie on that circle and
+            # expose the impostor. A true channel's samples all project
+            # onto the cross-section arc.
+            tri = mesh.vertices[mesh.faces[cf]]
+            smp = np.concatenate([
+                tri.mean(axis=1),
+                0.5 * (tri[:, 0] + tri[:, 1]),
+                0.5 * (tri[:, 1] + tri[:, 2]),
+                0.5 * (tri[:, 2] + tri[:, 0]),
+            ])
+            p2 = np.column_stack([smp @ u, smp @ v])
+            c2, r, rms = _circle_fit_2d(p2)
+            if rms > rms_gate:
+                continue
+            if not (10.0 * rms_gate < r <= 4.0 * diag):
+                continue
+            # arc span of the cross-section (largest angular gap
+            # complement). Full-turn channels are legitimate: a channel
+            # that wraps 360 deg around its spine IS a cylinder, and
+            # fitting it as one splits coaxial hole stacks (drill wall +
+            # cone + counterbore chained by the curvature bridge) that no
+            # other split separates. Only degenerate slivers are refused.
+            ang = np.arctan2(p2[:, 1] - c2[1], p2[:, 0] - c2[0])
+            gaps = np.diff(np.sort(ang))
+            span = 2.0 * np.pi - (float(gaps.max()) if len(gaps) else 0.0)
+            if span < np.deg2rad(3.0):
+                continue
+            # the normals must actually ROTATE: a planar leftover also has
+            # normals perpendicular to s, but zero spread
+            cn = mesh.face_normals[cf]
+            spread = float(np.arccos(np.clip(
+                np.min(cn @ cn.T), -1.0, 1.0)))
+            if spread < np.deg2rad(3.0):
+                continue
+            # Ruling test: a narrow sector of a cone/sphere/torus also has
+            # its normals on one great circle and projects near a circle,
+            # but its surface lines run ACROSS the candidate spine (the
+            # cone's generators meet at the apex), while a true channel is
+            # translation-invariant along s: its tessellation carries edges
+            # PARALLEL to the spine. Require most faces to have one.
+            tri_e = mesh.faces[cf][:, [(0, 1), (1, 2), (2, 0)]]
+            ev = mesh.vertices[tri_e[:, :, 1]] - mesh.vertices[tri_e[:, :, 0]]
+            el = np.linalg.norm(ev, axis=2)
+            el[el == 0.0] = 1.0
+            eu = ev / el[:, :, None]
+            par = np.abs(np.einsum("fij,j->fi", eu, best_s)) > 0.94  # <20deg
+            if float(np.mean(par.max(axis=1))) < 0.5:
+                continue
+            # A cone is locally a channel too (zero curvature along its
+            # generators, and a narrow sector's generators are nearly
+            # parallel to the great-circle spine). The global difference:
+            # a channel's rulings are mutually PARALLEL; a cone's CONVERGE
+            # at the apex (a torus patch's converge on its axis). Require
+            # the ruling edges to agree in direction across the component.
+            rdirs = eu[par]
+            if len(rdirs) < 2:
+                continue
+            g = np.abs(rdirs @ rdirs.T)
+            if float(g.min()) < np.cos(np.deg2rad(10.0)):
+                continue
+            claimed[sel] = True
+            channels.append(build_segment(mesh, cf))
+            found_any = True
+        if not found_any:
+            # best spine collected nothing: drop its inliers from further
+            # SEARCH (they stay in the remainder -- they were not turned
+            # into channels, so nothing else may swallow them)
+            excluded[inlier_local] = True
+
+    if not channels:
+        return [], faces
+    remainder = faces[~claimed]
+    groups = len(channels) + (1 if len(remainder) >= min_faces else 0)
+    if groups > 1:
+        sizes = np.array([len(s.face_indices) for s in channels]
+                         + ([len(remainder)] if len(remainder) >= min_faces else []))
+        too_many = groups > max(16, len(faces) // 25)
+        too_small = float(np.median(sizes)) < 2.0
+        if too_many or too_small:
+            return [], faces
+    channels.sort(key=lambda s: s.area, reverse=True)
+    return channels, remainder

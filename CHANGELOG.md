@@ -1,5 +1,188 @@
 # Changelog
 
+## 0.17.3 — 2026-08-22
+
+Reconstruction-robustness release, prompted by a field report of a
+3D-printed corner bracket that failed outright (#5, thanks @amoose136).
+Includes the follow-up executor fixes that bring the bracket's editable
+feature body in line with the mesh-accurate corrected shape (verified
+against the mesh with headless FreeCAD builds).
+
+### Added
+
+- **Gusset web recovery.** Thin triangular reinforcing webs inside a recess
+  (pointed at one end, tall at the other -- the corner gussets of a
+  bracket) were dropped entirely by the prismatic rebuild: they are not
+  holes, pads, or terraces, so no planner stage claimed them and the
+  rebuilt body was missing ~5% of the part. `_plan_gussets` now takes the
+  headless rebuild, isolates the connected components of
+  ``mesh \\ rebuild`` that sit on a recess floor, and re-emits each as a
+  LATERAL pad whose profile is the web's right-triangular side and whose
+  extrusion thickness is chosen so the prism volume equals the region's
+  true volume (matching mass without trusting coarse-mesh loft sections).
+  The pads are built AFTER the recess pockets so the pocket that carves
+  the cavity does not immediately delete them, and their base edge is
+  buried slightly into the floor to give OCC a real fusion volume. On
+  issue #5's bracket this recovers both corner gussets and moves the
+  parametric rebuild from -5% (webs missing) to within ~1-2% of the mesh.
+- **Bottom-face funnel pockets.** Mounting funnels that open on the BOTTOM
+  face and run up to the recess floor (an INTERMEDIATE plane, not the far
+  z-end) were invisible to the base through-opening matcher, which only
+  compares opposite extremes and demands near-equal area -- the funnel
+  tapers, and its far side is intermediate. `_plan_bottom_pockets` now
+  detects each bottom-face inner loop that centroid-matches a recess-floor
+  loop and emits a `from_bottom` pocket spanning the base-plate thickness,
+  skipping loops already cut by a drilled hole/counterbore/cone feature.
+  On issue #5's bracket this recovers the three mounting funnels.
+- **Constrained arc/circle detection in `loop_to_sketch`.** New
+  `max_sweep_deg` / `full_circle_deg` gates: runs whose fitted arc sweeps
+  between the two thresholds are spurious (a curve bowing across a diagonal
+  corner over unrelated boss outlines) and fall back to lines; tight arcs
+  (<= max_sweep, e.g. fillets) and near-full circles (>= full_circle, e.g.
+  boss outlines) are kept. The recess-mouth profiles use this so a 147-deg
+  impostor arc no longer rounds a 90-deg corner.
+- **Deviation correction (patch-boolean fallback).** New core module
+  `solidify`: `plan_to_mesh` executes a plan headlessly with mesh
+  booleans (base, pads incl. lateral, pockets, holes with counterbore/
+  countersink, conical pockets, cross-axis holes, fillets, chamfers),
+  `plan_corrections` reports the connected components of rebuild-vs-mesh
+  (OVER = what the feature tree over-built, UNDER = what it missed), and
+  `apply_corrections` closes the gap by intersecting with the source mesh
+  and fusing the UNDER patches back. The FreeCAD executor emits every
+  patch as its own tree object (a "<name> correction patches" group of
+  labelled patch solids) and builds the corrected shape as a visible
+  boolean chain (one Cut/Fuse per patch) validated against the headless
+  reference -- like the fitted-surface features of commercial hybrid
+  tools, every correction has a tree equivalent; where OCC's booleans
+  degenerate on the faceted input the chain is dropped and the exact
+  headless shape is installed instead, so the output is mesh-accurate
+  either way: the body stays the editable parametric history, the
+  corrected feature is the mesh-accurate output. This is the
+  hybrid-modelling fallback for freeform geometry no analytic primitive
+  captures: on issue #5's corner bracket (diagonal transition band, base
+  scoops) it closes the rebuild from +25% to within ~0.1% of the mesh
+  volume. Requires `manifold3d`; without it the plan is untouched and
+  behaves exactly as before.
+- **Blend-channel peeling (`split_by_channels`).** Refinement now peels
+  straight-spine channels -- constant-cross-section blend bands such as a
+  fillet strip along a straight edge -- out of a failed blob, after the
+  planar peel and before the curvature split. Curvature clustering cannot
+  separate adjacent strips of equal radius (their curvature proxy is
+  identical); the invariant that does is the spine direction. Candidate
+  spines come from adjacent-facet normal cross products, filtered by
+  dihedral angle rather than cross-product norm so finely
+  chord-tessellated holes (~0.1-1 deg per facet) still propose their
+  axis; a candidate is accepted only if its faces' normals share one
+  great circle, its on-surface samples project onto a single
+  cross-section circle, and its ruling edges are mutually parallel. The
+  last two gates reject the two impostor classes that pass a naive
+  great-circle test: a narrow cone or sphere sector (rulings converge)
+  and a flat slab wrap (cocircular corners). Full-turn channels are
+  accepted -- a channel wrapping 360 deg around its spine IS a cylinder,
+  and peeling one splits coaxial hole stacks (drill wall + cone +
+  counterbore chained by the curvature bridge) that no other split
+  separates. On the bracket this lifts recognized coverage 0.80 -> 0.85
+  and turns rim blend bands into real fillet/chamfer operations instead
+  of leaving them unrecognized (the rebuild kept every sharp corner).
+
+### Fixed
+
+- **"degenerate base extent" on parts whose flat faces are chained by
+  gently faceted transition blends.** The bracket's base, recess floor,
+  walls and top all fused into one ~3000-face segment whose curvature
+  proxy is continuous (flat faces' per-edge curvature sits at the noise
+  floor), so the refinement split could not break it and only a single
+  plane of the dominant normal cluster was recognized -- a zero-thickness
+  base the planner refuses. `reconstruct` now peels exactly-planar
+  sub-regions out of a failed blob first (`split_by_planes`:
+  vertex-coplanar region growing, each candidate validated by a global
+  plane fit), recovering the parallel flats at their distinct offsets.
+  Sub-significant slivers are deliberately left in the remainder so the
+  peel yields a few coherent surfaces, not primitive confetti.
+- **Compromise fits over near-flat blends.** A chamfer strip spanning the
+  part can "fit" a cylinder/sphere whose radius dwarfs the part; the
+  feature layer then read it as a giant fillet and the round-trip unioned
+  part-sized junk (the bracket rebuilt at ~5000x its volume). `fit_best`
+  now drops curved candidates whose radius exceeds 4x the segment
+  diagonal, and a suspicious fit (vertex rms far above tolerance) that is
+  itself a product of refinement splitting is reported honestly
+  unrecognized instead of accepted.
+- **Straight edges misread as a giant sketch arc.** A run of straight
+  edges whose corners happen to be concyclic (the bracket's footprint
+  diagonal is exactly cocircular with its two adjacent corners) passed the
+  arc-sampling gate with uniform turns and bowed a huge arc off the true
+  outline, inflating the extruded profile. `loop_to_sketch` now caps arc
+  radius at half the loop diagonal and falls back to lines.
+- **Executor deleted the terrace pocket when a bottom-side hole fell back
+  to pocket cuts.** The hole fallback's cleanup used `'op' in dir()`,
+  which saw the `op` variable leaked from the pocket loop and removed the
+  last terrace pocket instead of the never-created `PartDesign::Hole`.
+  Any part combining a recess with a hole that opens off the outer top
+  face lost its recess cut (the bracket rebuilt ~3x its true volume). The
+  cleanup now removes only a Hole object the same iteration created.
+- **Coaxial hole stacks fused into one unrecognized blob on fine
+  tessellations.** A drill wall, its taper and a counterbore chain into a
+  single segment whose curvature proxy is continuous (the cone bridges the
+  two cylinder radii), so neither the dihedral nor the curvature split
+  separates it and the whole hole is dropped (field-observed with OCC
+  0.05-chord tessellation, where the facet step is a fraction of a
+  degree). The channel peel now splits the stack into its cylinders and
+  the remaining cone, restoring counterdrill/counterbore detection.
+- **Partial cylinders without two blend faces claimed as fillets.** A
+  fillet is relational -- a blend between two faces. A compromise cylinder
+  fitted over a curved transition band has no two planar neighbours
+  perpendicular to its axis, yet the feature layer claimed it as a fillet
+  and the planner reported it unplanned. The fillet detector now requires
+  the two blend planes before claiming, so such strips stay recognized
+  surfaces without spawning an unplannable feature.
+- **Bottom-face countersunk hole now actually cuts.** A from-bottom THROUGH
+  bore opening on an internal face (the recess floor) was sketched on the
+  bottom face with `flip=False`, so the fallback Pocket extruded DOWN into
+  air and removed nothing -- the rebuilt body stayed solid where the hole
+  belongs. The drill now uses `flip=True` (sketch normal pointing down),
+  which a PartDesign Pocket cuts opposite, i.e. UP into the part (the same
+  convention the working from-bottom funnel pockets already use). The
+  countersink cone for a from-bottom hole was also placed ABOVE the opening
+  face, in the already-empty recess, cutting nothing; it now sits BELOW the
+  mouth -- widening at the opening face and narrowing toward the drill --
+  mirroring the top-side convention.
+- **Fillet edge matching robust to rebuild approximation.** All 7 detected
+  fillets were skipped ("no body edge matched") for two reasons: the matcher
+  required the body edge's endpoints to fall within the detected segment,
+  rejecting rebuilt edges LONGER than the one blend cylinder's span, and the
+  executor tolerance (0.09 mm) was tighter than the coarse-mesh fit error
+  that offsets the reconstructed sharp edge from the body's true edge.
+  `fillet_edge_matches` now accepts any collinear edge overlapping the
+  segment (sub- and super-edges), and the executor tolerance scales with the
+  blend size. On the bracket this applies the 3 rim fillets whose edges the
+  rebuild reproduces; the 4 fillets on the freeform diagonal band remain
+  skipped because the feature tree has no sharp edge there to dress (that
+  geometry is only recovered by the correction pass).
+
+### Removed
+
+- Leftover debug prints and a redundant duplicate hole-cutting loop in
+  `solidify.plan_to_mesh`.
+
+### Tests
+
+- Vendored the reported bracket (`tests/fixtures/`, see the test module
+  for provenance) and added `test_issue5_corner_bracket.py`: the plan
+  succeeds with the true 20 mm extent, the flats are recovered at several
+  distinct offsets, the countersink plus four cross-axis holes are
+  detected, and at least one blend feature reaches the build plan.
+- Added `test_blend_channels.py`: the peel recovers a fillet strip from
+  curved junk end to end, and refuses a cone wall and a planar slab wrap.
+- Added `test_solidify.py`: frustum cutters are watertight with exact
+  volumes, a fully captured part needs ~no patches, and the bracket's
+  corrections close the volume gap to within 2%. Suite grows from 452 to
+  465 passing.
+- The FreeCAD smoke test gains a terrace-plus-bottom-hole section pinning
+  the executor fix (the terrace pocket must survive the bottom-side
+  hole's pocket fallback, and the volume must match), and a bracket
+  deviation-correction section (corrected shape exists, volume within 3%
+  of the mesh).
+
 ## 0.17.2 — 2026-08-16
 
 Dependency documentation and robustness release, prompted by a field

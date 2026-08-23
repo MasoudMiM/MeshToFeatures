@@ -19,9 +19,14 @@ from .history import (BuildPlan, SketchArc, SketchCircle, SketchLine,
                       fillet_edge_matches, hole_op_properties,
                       loop_to_sketch, plan_history)
 from .standards import identify_metric
-from .segmentation import adaptive_angle_threshold, face_curvature, split_by_curvature
+from .segmentation import (adaptive_angle_threshold, face_curvature,
+                           split_by_channels, split_by_curvature,
+                           split_by_planes)
+from .solidify import (CorrectionOp, add_corrections, apply_corrections,
+                       boolean_engine_available, plan_corrections,
+                       plan_to_mesh)
 
-__version__ = "0.17.2"
+__version__ = "0.17.3"
 __all__ = [
     "Plane", "Sphere", "Cylinder", "Cone", "Primitive",
     "FitResult", "fit_plane", "fit_sphere", "fit_cylinder", "fit_cone", "fit_best",
@@ -37,4 +42,7 @@ __all__ = [
     "fillet_edge_matches",
     "identify_metric",
     "adaptive_angle_threshold", "face_curvature", "split_by_curvature",
+    "split_by_planes", "split_by_channels",
+    "CorrectionOp", "boolean_engine_available", "plan_to_mesh",
+    "plan_corrections", "apply_corrections", "add_corrections",
 ]

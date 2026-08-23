@@ -150,7 +150,8 @@ def _make_arc(pts: np.ndarray, c: np.ndarray, r: float) -> SketchArc:
 
 
 def loop_to_sketch(loop: np.ndarray, tol: float | None = None,
-                   arcs: bool = True) -> list:
+                   arcs: bool = True, max_sweep_deg: float | None = None,
+                   full_circle_deg: float = 270.0) -> list:
     """Decompose a closed 2D polyline into lines, arcs, or a full circle.
 
     Greedy: grow the current run while a line (preferred) or a circle
@@ -161,9 +162,18 @@ def loop_to_sketch(loop: np.ndarray, tol: float | None = None,
     """
     loop = np.asarray(loop, dtype=float)
     n = len(loop)
+    diag = float(np.linalg.norm(loop.max(axis=0) - loop.min(axis=0)))
     if tol is None:
-        diag = float(np.linalg.norm(loop.max(axis=0) - loop.min(axis=0)))
         tol = max(1e-4 * diag, 1e-9)
+    # An arc in a sketch profile is a fillet/round -- small relative to the
+    # profile. A run of straight edges whose corners happen to be concyclic
+    # (any rectangle's are; issue #5's L-bracket footprint diagonal is
+    # exactly cocircular with its two adjacent corners) also passes the
+    # arc-like-sampling gate with uniform turns, fitting a circle whose
+    # radius is a large fraction of the whole profile. Such a "curve" bows
+    # far off the true straight edges and inflates the extruded profile, so
+    # cap the radius and let the run fall back to lines.
+    arc_radius_cap = 0.5 * diag
 
     def _decompose(pts_closed: np.ndarray, m: int) -> list:
         prims: list = []
@@ -180,12 +190,26 @@ def loop_to_sketch(loop: np.ndarray, tol: float | None = None,
             k = i + 3
             res, c, r = (_circle_residual(pts_closed[i:k + 1])
                          if arcs and k <= m else (np.inf, None, None))
-            if res <= tol:
+            if res <= tol and r is not None and r <= arc_radius_cap:
                 while k + 1 <= m:
                     res2, c2, r2 = _circle_residual(pts_closed[i:k + 2])
-                    if res2 > tol:
+                    if res2 > tol or r2 > arc_radius_cap:
                         break
                     k, c, r = k + 1, c2, r2
+                # Sweep gate: fillets are tight (< max_sweep deg); full
+                # circles (> full_circle deg) become SketchCircle later;
+                # anything in between is a spurious fit (e.g. arc bridging
+                # a diagonal corner across boss outlines -- 90-270 deg).
+                if max_sweep_deg is not None:
+                    ang = np.unwrap(np.arctan2(pts_closed[i:k + 1, 1] - c[1],
+                                               pts_closed[i:k + 1, 0] - c[0]))
+                    sw = abs(np.degrees(ang[-1] - ang[0]))
+                    if max_sweep_deg < sw < full_circle_deg:
+                        prims.append(SketchLine(
+                            start=pts_closed[i].copy(),
+                            end=pts_closed[i + 1].copy()))
+                        i += 1
+                        continue
                 prims.append(_make_arc(pts_closed[i:k + 1], c, r))
                 i = k
             else:
@@ -271,6 +295,12 @@ class PocketOp:
     #: decks stand
     hole_profiles: list = field(default_factory=list)
     label: str = ""
+    #: mouth profile (same shape/semantics as ``profile``): when the
+    #: cavity cross-section CHANGES with height (tapered walls, receding
+    #: bosses) the pocket is built as a SUBTRACTIVE LOFT between the
+    #: floor profile and the mouth profile instead of a prismatic
+    #: extrusion. ``None`` keeps the prismatic path for constant cavities.
+    mouth_profile: list | None = None
 
 
 @dataclass
@@ -315,11 +345,17 @@ class FilletOp:
 
 def fillet_edge_matches(op: FilletOp, p0: np.ndarray, p1: np.ndarray,
                         tol: float) -> bool:
-    """Does the straight edge (p0, p1) lie on ``op``'s sharp-edge segment?
+    """Does the straight edge (p0, p1) lie on ``op``'s sharp-edge line?
 
     Pure geometric matching (no topological names): direction parallel,
-    both endpoints within ``tol`` of the segment. Sub-edges are accepted
-    because boolean rebuilds may split an edge into pieces.
+    both endpoints within ``tol`` of the sharp edge's infinite LINE, and the
+    edge overlapping the detected segment along that line. Sub-edges are
+    accepted because boolean rebuilds may split an edge into pieces, and
+    SUPER-edges are accepted because the detected segment (one blend
+    cylinder's span) is often shorter than the rebuilt sharp edge it dresses
+    -- measuring endpoint distance to the clamped segment would reject the
+    overhang. A parallel edge on a different line stays rejected because its
+    endpoints sit more than ``tol`` from the sharp edge's line.
     """
     p0 = np.asarray(p0, dtype=float)
     p1 = np.asarray(p1, dtype=float)
@@ -332,12 +368,18 @@ def fillet_edge_matches(op: FilletOp, p0: np.ndarray, p1: np.ndarray,
     a, b = op.edge_start, op.edge_end
     ab = b - a
     L2 = float(ab @ ab)
+    if L2 < 1e-12:
+        return False
+    ts = []
     for p in (p0, p1):
         t = float((p - a) @ ab) / L2
-        if t < -tol or t > 1 + tol:
+        ts.append(t)
+        if np.linalg.norm(p - (a + t * ab)) > tol:
             return False
-        if np.linalg.norm(p - (a + np.clip(t, 0, 1) * ab)) > tol:
-            return False
+    lo, hi = min(ts), max(ts)
+    pad = tol / float(np.sqrt(L2))
+    if hi < -pad or lo > 1.0 + pad:
+        return False
     return True
 
 
@@ -418,6 +460,15 @@ class BuildPlan:
     unplanned: list[str] = field(default_factory=list)
     #: labels of PocketOps synthesized from exposed multi-level tops
     step_labels: list[str] = field(default_factory=list)
+    #: deviation-correction patches (solidify.CorrectionOp): watertight
+    #: patch solids to cut/add after the parametric features, covering
+    #: freeform geometry no feature captured. Filled by
+    #: :func:`.solidify.plan_corrections`; empty keeps legacy behaviour.
+    corrections: list = field(default_factory=list)
+    #: the source mesh the corrections were computed against; the executor
+    #: intersects the finished body with it (removing all OVER at once)
+    #: before fusing the UNDER patches. Set with ``corrections``.
+    source_mesh: object = None
 
 
 def hole_op_properties(op: HoleOp) -> dict:
@@ -935,6 +986,11 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
     _plan_lateral_pads(plan, report, z, x, y, origin, to2d, outer3d, consumed)
     _plan_terraces(plan, report, members, z, x, y, origin, to2d, outer3d,
                    skip=_cone_faces)
+    _upgrade_to_tapered_pockets(plan, report, z, x, y, origin, to2d,
+                                outer3d)
+    _plan_bottom_pockets(plan, report, members, feats, z, x, y, origin,
+                         to2d)
+    _plan_gussets(plan, report, z, x, y, origin)
     _lateral_pad_mesh_veto(plan, report, x, y, z, origin, _tol)
     # Decline heavily faceted / organic exports. Count the intermediate
     # horizontal member SEGMENTS (a tessellated curve is dozens of thin
@@ -1663,7 +1719,7 @@ def _plan_terraces(plan, report, members, z, x_ax, y_ax, origin, to2d,
             d = float(np.hypot(cx - px, cy - py))
             if d < 1e-9:
                 continue
-            fr = min(2.0 * tol / d, 0.49)       # step ~2*tol inward
+            fr = min(max(2.0 * tol, 0.2) / max(d, 1e-9), 0.49)
             probes.append((px + (cx - px) * fr, py + (cy - py) * fr))
         if not probes:
             return True
@@ -1730,9 +1786,300 @@ def _plan_terraces(plan, report, members, z, x_ax, y_ax, origin, to2d,
             plan.pockets.append(PocketOp(
                 profile=loop_to_sketch(ext, arcs=False),
                 depth=depth, from_top=up, label=label,
-                hole_profiles=[loop_to_sketch(hh, arcs=False)
+                hole_profiles=[loop_to_sketch(hh, max_sweep_deg=100)
                                for hh in holes]))
             plan.step_labels.append(label)
+
+
+def _upgrade_to_tapered_pockets(plan, report, z, x, y, origin, to2d,
+                                base_outer3d, spread_threshold=0.03):
+    """Detect cavities whose cross-section changes with height and replace
+    their prismatic PocketOp with a TaperedPocketOp (subtractive loft).
+
+    When the cavity profile at the mouth is significantly different from
+    the floor footprint (area spread > threshold), the prismatic cut
+    either removes material it should leave (bosses that recede with
+    height) or leaves material it should remove (walls that flare
+    outward). A loft between the two profiles follows the actual geometry.
+
+    Only top-side pockets are upgraded (the cross-section near z = plan
+    length defines the mouth); through pockets, pads, and bottom-side
+    pockets are unchanged.
+    """
+    L = plan.base.length
+    mesh = report.mesh
+    if mesh is None:
+        return
+    from shapely.geometry import Polygon
+    from .cross_sections import profile_at, area_spread
+    # outer pentagon in MESH xy (the base_outer3d is in mesh coords; to2d
+    # maps to the plan frame but profile_at works in mesh coords)
+    try:
+        outer_2d = Polygon(base_outer3d[:, :2].tolist())
+    except Exception:                                      # noqa: BLE001
+        return
+
+    for k, pk in enumerate(plan.pockets):
+        if not getattr(pk, "from_top", True):
+            continue
+        if getattr(pk, "through", False):
+            continue
+        depth = float(pk.depth)
+        floor_z = L - depth
+        # Try several z near the mouth and floor -- coarse STL meshes only
+        # yield clean cross-sections at a few discrete heights
+        floor = mouth = None
+        for dz in (0.0, 0.5, 1.0, -0.5):
+            if floor is None:
+                floor = profile_at(mesh, floor_z + dz,
+                                   outer_pentagon=outer_2d)
+        # Mouth: the top ~15 % of the cavity (well above the floor but
+        # below the rim blend -- the bosses have fully evolved here).
+        mouth_z = L - 0.15 * depth
+        for dz in np.arange(-1.0, 1.01, 0.2):
+            if mouth is None:
+                mouth = profile_at(mesh, float(mouth_z + dz),
+                                   outer_pentagon=outer_2d)
+        if floor is None or mouth is None:
+            continue
+        spread = area_spread([floor, mouth])
+        if spread < spread_threshold or spread > 0.25:
+            # skip both trivially-identical profiles AND geometric
+            # steps (cross-section change >25% is a step, not a taper)
+            continue
+        mouth_loop = np.array(mouth.polygon.exterior.simplify(0.1).coords)
+        mouth_2d = to2d(mouth_loop)
+        mouth_2d = _dedupe_loop(mouth_2d, 0.01)
+        if not _valid_loop(mouth_2d, 1e-6):
+            continue
+        mpro = loop_to_sketch(mouth_2d, max_sweep_deg=100)
+        pk.mouth_profile = mpro
+
+
+def _plan_bottom_pockets(plan, report, members, feats, z, x, y, origin,
+                         to2d):
+    """Funnel-shaped through-passages opening on the BOTTOM face.
+
+    The bracket's mounting funnels run from the bottom face up to the
+    recess floor (the lowest intermediate plane), NOT to the far z-end, so
+    the base through-opening matcher (which only compares opposite extremes
+    and demands near-equal area) never sees them -- the funnel tapers, and
+    its far side is an intermediate plane. Model each as a ``from_bottom``
+    pocket spanning the base-plate thickness (bottom face -> recess floor);
+    the recess pocket above already carves the cavity, so these only open
+    the plate. Loops that coincide with a drilled hole/counterbore feature
+    are skipped (that feature cuts them)."""
+    from shapely.geometry import Polygon
+    L = plan.base.length
+    tol = max(1e-3 * L, 1e-9)
+    horiz = []
+    for _i, s in members:
+        p = s.fit.primitive
+        if not hasattr(p, "normal") or abs(float(p.normal @ z)) < 0.9:
+            continue
+        horiz.append((float((p.point - origin) @ z), s))
+    if not horiz:
+        return
+    base_z = min(zz for zz, _ in horiz)
+    above = sorted(zz for zz, _ in horiz if zz > base_z + tol)
+    if not above:
+        return
+    plate_top = above[0]
+    plate_thick = plate_top - base_z
+    if plate_thick < 0.02 * L or plate_thick > 0.5 * L:
+        return
+    bottom_plane = next(s for zz, s in horiz if abs(zz - base_z) < tol)
+    top_plane = next(s for zz, s in horiz if abs(zz - plate_top) < tol)
+
+    def inner_loops(seg):
+        loops = seg.boundary_loops
+        if len(loops) < 2:
+            return []
+        areas = [abs(Polygon(to2d(l[:, :3])).area) for l in loops]
+        outer_idx = int(np.argmax(areas))
+        return [loops[i] for i in range(len(loops)) if i != outer_idx]
+
+    bot_inners = inner_loops(bottom_plane.segment)
+    top_inners = inner_loops(top_plane.segment)
+    if not bot_inners or not top_inners:
+        return
+    top_centroids = [to2d(l[:, :3]).mean(0) for l in top_inners]
+
+    # drilled holes / counterbores / cone pockets already cut their mouths
+    drilled = []
+    for ff in feats.features:
+        if ff.kind in ("hole", "counterbore", "cone_pocket") \
+                and "position" in ff.params:
+            fc = to2d(np.asarray(ff.params["position"], dtype=float))[0]
+            fr = 0.5 * float(ff.params.get("diameter",
+                                           ff.params.get("mouth_radius", 0.0)))
+            drilled.append((fc, fr))
+
+    def is_drilled(loop2):
+        c = loop2.mean(0)
+        lr = float(np.mean(np.linalg.norm(loop2 - c, axis=1)))
+        for fc, fr in drilled:
+            if float(np.linalg.norm(c - fc)) < max(3.0 * tol, 0.5 * fr) \
+                    and abs(lr - fr) <= 0.35 * max(fr, tol):
+                return True
+        return False
+
+    for bl in bot_inners:
+        bl2 = to2d(bl[:, :3])
+        if not _valid_loop(bl2, tol) or is_drilled(bl2):
+            continue
+        bc = bl2.mean(0)
+        if not any(float(np.linalg.norm(bc - tc)) < 2.0
+                   for tc in top_centroids):
+            continue
+        plan.pockets.append(PocketOp(
+            profile=loop_to_sketch(bl2, arcs=False),
+            depth=float(plate_thick), from_top=False,
+            label=f"Bottom funnel to depth {plate_thick:g}"))
+    if any(not getattr(p, "from_top", True) for p in plan.pockets):
+        top_pk = [p for p in plan.pockets if getattr(p, "from_top", True)]
+        bot_pk = [p for p in plan.pockets
+                  if not getattr(p, "from_top", True)]
+        plan.pockets[:] = bot_pk + top_pk
+
+
+def _signed_area(loop2d: np.ndarray) -> float:
+    return 0.5 * float(np.dot(loop2d[:, 0], np.roll(loop2d[:, 1], -1))
+                       - np.dot(loop2d[:, 1], np.roll(loop2d[:, 0], -1)))
+
+
+def _plan_gussets(plan, report, z, x, y, origin):
+    """Thin triangular reinforcing webs inside a recess.
+
+    These are the UNDER regions the prismatic rebuild misses: a plate that
+    rises from the recess floor, pointed at one end and tall at the other
+    (a right-triangular side profile). Each is recovered as a LATERAL pad
+    whose profile is that triangle and whose extrusion thickness is chosen
+    so the prism volume equals the region's true volume -- matching both
+    shape and mass without needing the (coarse-mesh-unreliable) loft
+    cross-sections. Detection runs the headless rebuild and takes the
+    connected components of ``mesh \\ rebuild`` that sit above the base
+    plate; anything too small or too large is left to the correction pass.
+    """
+    from .solidify import plan_to_mesh
+    mesh = report.mesh
+    if mesh is None:
+        return
+    L = plan.base.length
+    # a web lives on a recess floor: require a from-top pocket to exist and
+    # use the lowest such floor as the seat the web must rise from
+    recess_floor_z = None
+    for pk in plan.pockets:
+        if getattr(pk, "from_top", True) and not getattr(pk, "through", False):
+            fz = L - float(pk.depth)
+            if recess_floor_z is None or fz < recess_floor_z:
+                recess_floor_z = fz
+    if recess_floor_z is None:
+        return
+    try:
+        solid = plan_to_mesh(plan)
+    except Exception:                                      # noqa: BLE001
+        return
+    if solid is None:
+        return
+    try:
+        under = mesh.difference(solid)
+    except Exception:                                      # noqa: BLE001
+        return
+    span = float(mesh.bounds[1][2] - mesh.bounds[0][2])
+    z_floor_min = float(mesh.bounds[0][2]) + 0.1 * span
+    for c in under.split():
+        if c.volume < 100 or c.volume > 0.2 * float(mesh.volume):
+            continue
+        if c.bounds[0][2] < z_floor_min:
+            continue                       # base-plate feature, not a web
+        _emit_gusset(plan, c, z, x, y, origin, recess_floor_z, mesh)
+
+
+def _emit_gusset(plan, c, z, x, y, origin, recess_floor_z, mesh=None):
+    pts = c.vertices
+    q = pts - origin
+    v_all = q @ z
+    floor_v, top_v = float(v_all.min()), float(v_all.max())
+    # the web must rise FROM the recess floor (not float mid-cavity)
+    if abs(floor_v - recess_floor_z) > 0.05 * plan.base.length:
+        return
+    # length vs thin axis: the larger horizontal extent is the plate's
+    # length, the smaller its thickness direction (plan-frame axes x, y)
+    exf = float((q @ x).max() - (q @ x).min())
+    eyf = float((q @ y).max() - (q @ y).min())
+    if exf > eyf:
+        u, a = x, y
+    else:
+        u, a = y, x
+    uq = q @ u
+    vq = q @ z
+    u_mid = 0.5 * (float(uq.min()) + float(uq.max()))
+    lo = uq < u_mid
+    hi = ~lo
+    vext_lo = float(vq[lo].max() - vq[lo].min()) if lo.any() else 1e9
+    vext_hi = float(vq[hi].max() - vq[hi].min()) if hi.any() else 1e9
+    if vext_lo < vext_hi:
+        pos_pointed_u, pos_tall_u = float(uq.min()), float(uq.max())
+    else:
+        pos_pointed_u, pos_tall_u = float(uq.max()), float(uq.min())
+    base_len = abs(pos_tall_u - pos_pointed_u)
+    height = top_v - floor_v
+    tri_area = 0.5 * base_len * height
+    if tri_area < 1e-6 or base_len < 1e-6:
+        return
+    eff_thick = float(c.volume) / tri_area
+    # a web must be a PLATE: much thinner than it is long
+    if eff_thick > 0.5 * base_len:
+        return
+    # Bury the base edge into the recess floor so the pad fuses with the
+    # body instead of floating on a line contact (OCC leaves a line-touching
+    # solid detached; field-observed ~40% volume loss without the bury).
+    bury = max(0.2, 0.02 * plan.base.length)
+    # Extend the tall end to the recess ceiling so the web reaches the
+    # full cavity height (the UNDER region omits what the rebuild already
+    # captured, so its max-z under-reports). The ceiling is the mesh top
+    # in the web's xy region, clamped by the plan height.
+    if mesh is not None:
+        mx = float((pts @ x).min()), float((pts @ x).max())
+        my = float((pts @ y).min()), float((pts @ y).max())
+        region = ((mesh.vertices[:, 0] >= mx[0] - 0.1) &
+                  (mesh.vertices[:, 0] <= mx[1] + 0.1) &
+                  (mesh.vertices[:, 1] >= my[0] - 0.1) &
+                  (mesh.vertices[:, 1] <= my[1] + 0.1))
+        if region.any():
+            ceiling_v = float(mesh.vertices[region, 2].max())
+        else:
+            ceiling_v = top_v
+    else:
+        ceiling_v = top_v
+    ceiling_v = min(ceiling_v, float(plan.base.length))
+    if ceiling_v > top_v + 0.1:
+        top_v = ceiling_v
+        height = top_v - floor_v
+        tri_area = 0.5 * base_len * height
+        eff_thick = float(c.volume) / tri_area
+        if eff_thick > 0.5 * base_len:
+            eff_thick = float(c.volume) / (0.5 * base_len * (top_v - floor_v + 1e-6))
+    tri_uv = np.array([[pos_pointed_u, floor_v - bury],
+                       [pos_tall_u, floor_v - bury],
+                       [pos_tall_u, top_v]])
+    if _signed_area(tri_uv) < 0:
+        tri_uv = tri_uv[::-1]
+    u_pf = np.array([float(u @ x), float(u @ y), float(u @ z)])
+    v_pf = np.array([float(z @ x), float(z @ y), float(z @ z)])
+    a_pf = np.array([float(a @ x), float(a @ y), float(a @ z)])
+    if float(np.linalg.det(np.column_stack([u_pf, v_pf, a_pf]))) < 0.0:
+        v_pf = -v_pf
+        tri_uv = tri_uv.copy()
+        tri_uv[:, 1] = -tri_uv[:, 1]
+    thin_center_a = float((pts.mean(axis=0) - origin) @ a)
+    min_axis = thin_center_a - 0.5 * eff_thick
+    plan.pads.append(PadOp(
+        profile=loop_to_sketch(tri_uv, arcs=False),
+        length=float(eff_thick), axis=a_pf,
+        plane_origin=min_axis * a_pf, plane_u=u_pf, plane_v=v_pf,
+        label="Gusset web"))
 
 
 def _plan_steps(plan, report, members, z, origin, to2d, base_outer3d):
@@ -1867,18 +2214,16 @@ def _fillet_op(report, patches, f, z_dir) -> FilletOp | None:
     for j, s in enumerate(report.surfaces):
         if not isinstance(s.fit.primitive, Plane):
             continue
-        # blend planes are tangent to the fillet: their normals are
-        # perpendicular to the fillet axis (excludes the end-cap faces).
-        # Use the SNAPPED primitive normal, sign-oriented by the raw face
-        # normals: the raw mean itself is tilted by boolean sliver
-        # triangles (~1 deg observed), which shifts the sharp edge by
-        # r * sin(tilt).
         outward = s.fit.primitive.normal.copy()
         if float(outward @ s.segment.face_normals.mean(axis=0)) < 0:
             outward = -outward
-        if abs(float(outward @ d)) > 0.1:
-            continue
+        if abs(float(outward @ d)) > 0.75:
+            continue  # end caps (near-parallel) or heavily tilted faces
         if len(fkeys & _keys(s.segment.points)) >= 2:
+            neighbours.append(outward)
+        elif float(np.min(
+                np.linalg.norm(seg.points[:, :3, None]
+                               - s.segment.points[:, :3].T, axis=1))) < 0.5:
             neighbours.append(outward)
         if len(neighbours) == 2:
             break

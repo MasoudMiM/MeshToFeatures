@@ -307,6 +307,80 @@ def _lateral_pad(doc, body, plan, pad, k):
     _rollback_if_broken(doc, body, op, s)
 
 
+def _shape_from_mesh(m):
+    """A watertight trimesh -> Part solid, one planar face per triangle.
+
+    Used for deviation-correction patches and the source-mesh intersection.
+    Built via makePolygon/makeShell (the documented API): ``Part.Shape``
+    fed a raw facet list crashes FreeCAD 1.1 outright. Raises on failure
+    so the caller can degrade.
+    """
+    verts = m.vertices
+    faces = []
+    for tri in m.faces:
+        a = App.Vector(float(verts[tri[0]][0]), float(verts[tri[0]][1]),
+                       float(verts[tri[0]][2]))
+        b = App.Vector(float(verts[tri[1]][0]), float(verts[tri[1]][1]),
+                       float(verts[tri[1]][2]))
+        c = App.Vector(float(verts[tri[2]][0]), float(verts[tri[2]][1]),
+                       float(verts[tri[2]][2]))
+        if a.isEqual(b, 1e-9) or b.isEqual(c, 1e-9) or a.isEqual(c, 1e-9):
+            continue                       # degenerate facet (boolean debris)
+        faces.append(Part.Face(Part.makePolygon([a, b, c, a])))
+    sh = Part.makeShell(faces)
+    try:
+        out = Part.Solid(sh)
+    except Exception:                                      # noqa: BLE001
+        out = sh
+    if not out.isValid():
+        # boolean output carries micro-slivers that fail OCC's BRep check
+        # without affecting the geometry; fix() heals them (volume-
+        # preserving, verified on the issue-#5 bracket)
+        try:
+            out.fix(0.0, 0.1, 0.1)
+        except Exception:                                  # noqa: BLE001
+            pass
+    return out
+
+
+def _apply_corrections(doc, body, plan: BuildPlan, name: str):
+    """Terminal deviation correction (hybrid-modelling fallback).
+
+    Computed headlessly with manifold booleans (intersect the parametric
+    rebuild with the source mesh, union the UNDER patches -- proven exact
+    where OCC's booleans degenerate on faceted input), then installed as
+    a single ``Part::Feature`` with the mesh-accurate shape. The body
+    stays the editable parametric history and is never modified here.
+    Degrades to a warning on any failure.
+    """
+    mesh = getattr(plan, "source_mesh", None)
+    corrs = getattr(plan, "corrections", None) or []
+    if not corrs or mesh is None:
+        return None
+    try:
+        from .core.solidify import apply_corrections, plan_to_mesh
+        solid = plan_to_mesh(plan)
+        if solid is None:
+            App.Console.PrintWarning(
+                "[meshtofeatures] deviation correction skipped: plan not "
+                "headlessly executable\n")
+            return None
+        corrected = apply_corrections(solid, mesh, corrs)
+        shape = _shape_from_mesh(corrected)
+        feat = doc.addObject("Part::Feature", name + "_Corrected")
+        feat.Shape = shape
+        feat.Label = name + " (corrected)"
+        App.Console.PrintMessage(
+            f"[meshtofeatures] deviation correction applied; "
+            f"corrected volume {shape.Volume:.1f} "
+            f"(mesh {mesh.volume:.1f})\n")
+        return feat
+    except Exception as exc:                               # noqa: BLE001
+        App.Console.PrintWarning(
+            f"[meshtofeatures] deviation correction failed: {exc}\n")
+        return None
+
+
 def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
     """Create a PartDesign Body implementing ``plan``; returns the body."""
     body = doc.addObject("PartDesign::Body", name)
@@ -329,8 +403,15 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
     doc.recompute()
 
     L = float(plan.base.length)
+    # Gusset webs live INSIDE a recess, so they must be added after the
+    # pocket that carves that recess -- split them out of the main pad pass
+    # and build them once the pockets are done.
+    gusset_pads = []
     for k, p in enumerate(plan.pads):
         if getattr(p, "axis", None) is not None:
+            if p.label == "Gusset web":
+                gusset_pads.append((k, p))
+                continue
             _lateral_pad(doc, body, plan, p, k)
             continue
         top = getattr(p, "from_top", True)
@@ -347,11 +428,19 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
 
     for k, p in enumerate(plan.pockets):
         top = getattr(p, "from_top", True)
-        entries = list(p.profile)
+        use = list(getattr(p, "mouth_profile", None) or p.profile)
+        entries = use.copy()
         for hp in getattr(p, "hole_profiles", []):
-            entries.extend(hp)      # nested wires become holes in the cut
-        s = _circle_sketch(doc, body, plan, L if top else 0.0, entries,
-                           f"PocketProfile{k}", flip=not top)
+            entries.extend(hp)
+        try:
+            s = _circle_sketch(doc, body, plan, L if top else 0.0, entries,
+                               f"PocketProfile{k}", flip=not top)
+        except Exception:                     # degenerate mouth profile fallback
+            use, entries = list(p.profile), list(p.profile)
+            for hp in getattr(p, "hole_profiles", []):
+                entries.extend(hp)
+            s = _circle_sketch(doc, body, plan, L if top else 0.0, entries,
+                               f"PocketProfile{k}", flip=not top)
         op = doc.addObject("PartDesign::Pocket", f"Pocket{k}")
         body.addObject(op)
         op.Profile = s
@@ -363,6 +452,10 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         _apply_refine(op)
         s.Visibility = False
         _rollback_if_broken(doc, body, op, s, deferred=deferred)
+
+    # gusset webs, now that the recess pockets exist to receive them
+    for k, p in gusset_pads:
+        _lateral_pad(doc, body, plan, p, k)
 
     for k, h in enumerate(plan.holes):
         import numpy as np
@@ -388,9 +481,22 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         else:
             z_at = L if top else 0.0
             cb_extra = 0.0
-        s = _circle_sketch(doc, body, plan, z_at, circles, f"HoleProfile{k}",
-                           flip=not top)
+        # A from-bottom THROUGH bore opening below the top: a flipped pocket
+        # down from the opening face under-cuts (only the countersink depth
+        # lands), so drill UP from the bottom face instead. Drilling up means
+        # the sketch sits on the bottom face with its normal pointing DOWN
+        # (flip=True): a PartDesign Pocket cuts opposite its sketch normal,
+        # so flip=True extrudes the cut up into the part while flip=False
+        # extrudes down into air and removes nothing (field-observed: the
+        # issue-#5 bracket's bottom countersink stayed solid). The
+        # countersink cone is placed at the opening face below.
+        drill_z_at, drill_flip = z_at, not top
+        if h.through and not top and surf_z is not None:
+            drill_z_at, drill_flip = 0.0, True
+        s = _circle_sketch(doc, body, plan, drill_z_at, circles,
+                           f"HoleProfile{k}", flip=drill_flip)
         s.Visibility = False
+        op = None
         try:
             if not top or opens_below_top:
                 # PartDesign::Hole misbehaves whenever the opening face is not
@@ -421,7 +527,14 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                 App.Console.PrintWarning(
                     f"[meshtofeatures] Hole feature failed ({exc}); "
                     f"using pockets\n")
-            doc.removeObject(op.Name) if 'op' in dir() else None
+            # Remove ONLY a Hole object this iteration actually created.
+            # (The old `'op' in dir()` test saw `op` leaked from the pocket
+            # loop above and deleted the last terrace pocket whenever a
+            # bottom-side hole took this fallback before its Hole existed --
+            # field: issue #5's bracket lost its recess cut to its own
+            # bottom-face countersink.)
+            if op is not None:
+                doc.removeObject(op.Name)
             op = doc.addObject("PartDesign::Pocket", f"Hole{k}")
             body.addObject(op)
             op.Profile = s
@@ -493,8 +606,14 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                     mouth_z = face_z - cbd
                     z_lo, r_lo, r_hi = mouth_z - run, dr, cr
                 else:
+                    # from-bottom: the taper still widens AT the opening face
+                    # (the recess floor) and narrows DOWN toward the drill, so
+                    # the cone sits BELOW the mouth exactly like the top case.
+                    # (The old z_lo=mouth_z, r_lo=cr form put the cone ABOVE
+                    # the floor, in the already-empty recess, cutting nothing
+                    # -- field-observed: no countersink on the bottom hole.)
                     mouth_z = face_z + cbd
-                    z_lo, r_lo, r_hi = mouth_z, cr, dr
+                    z_lo, r_lo, r_hi = mouth_z - run, dr, cr
                 for pos in h.positions:
                     _add_cone(doc, body, plan, f"Countersink{k}",
                               pos[0], pos[1], z_lo, r_lo, r_hi, run,
@@ -615,7 +734,15 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         import numpy as np
         diag = float(np.linalg.norm(
             np.array(body.Shape.BoundBox.DiagonalLength)))
-        tol = max(1e-3 * diag, 1e-6)
+        # The detected sharp edge is reconstructed from the mesh's blend
+        # cylinder + plane fits, so it can sit a few tenths of a mm off the
+        # rebuilt body's true edge (coarse-tessellation fit error, field:
+        # issue #5's bracket rim fillets all missed at a 0.09 mm tol). Scale
+        # the match tolerance with the blend size so the matcher tolerates
+        # that fit error without accepting a parallel edge on the wrong line.
+        blend_sizes = [float(fo.radius) for fo in getattr(plan, "fillets", [])]
+        blend_sizes += [float(co.size) for co in getattr(plan, "chamfers", [])]
+        tol = max(0.5 * max(blend_sizes), 1e-3 * diag, 1e-6)
         prev = body.Tip
         dressups = [("PartDesign::Fillet", "Radius", fo.radius, fo)
                     for fo in getattr(plan, "fillets", [])]
@@ -700,6 +827,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
             App.Console.PrintMessage(msg)
             print(msg.strip())
 
+    # ---- deviation correction: mesh-accurate terminal shape ---------------
+    _apply_corrections(doc, body, plan, name)
 
     doc.recompute()
     return body

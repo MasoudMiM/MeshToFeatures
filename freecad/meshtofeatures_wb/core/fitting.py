@@ -347,8 +347,8 @@ def fit_best(
     """
     pts = _as_points(points)
     score = pts if score_points is None else _as_points(score_points)
+    diag = float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0)))
     if tolerance is None:
-        diag = float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0)))
         tolerance = max(1e-4 * diag, 1e-12)
 
     # nonlinear refinement cost scales with point count; a deterministic
@@ -382,8 +382,18 @@ def fit_best(
             fit = fitter()
         except (ValueError, np.linalg.LinAlgError):
             continue  # degenerate for this segment; skip
+        prim = fit.primitive
+        # A curved primitive whose radius dwarfs the segment's own extent is
+        # a compromise over a near-flat blend (a chamfer strip spanning the
+        # part bends only a few degrees, so a cylinder/sphere "fits" with a
+        # centre far outside the part). Downstream would read it as a giant
+        # fillet and union part-sized junk; the true surface is the simpler
+        # model, so drop the candidate and let selection fall back to it.
+        if getattr(prim, "radius", None) is not None and diag > 0.0 \
+                and prim.radius > 4.0 * diag:
+            continue
         # re-score on the surface-representative sample set
-        candidates.append(FitResult.from_primitive(fit.primitive, score))
+        candidates.append(FitResult.from_primitive(prim, score))
 
     if not candidates:
         raise ValueError("no primitive could be fitted to the segment")
