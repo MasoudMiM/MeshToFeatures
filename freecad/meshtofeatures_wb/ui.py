@@ -56,6 +56,12 @@ def compute(tm, snap: bool, rebuild: bool, progress=None) -> dict:
             plan = plan_history(report, feats, pats, patches)
         except Exception as exc:  # noqa: BLE001 - reported, not fatal
             plan_error = str(exc)
+        if plan is not None:
+            try:
+                from .core.solidify import add_corrections
+                add_corrections(plan, tm)
+            except Exception:  # noqa: BLE001 - optional step
+                pass
     if progress:
         progress("finished", 1.0)
     return {"report": report, "actions": actions, "patches": patches,

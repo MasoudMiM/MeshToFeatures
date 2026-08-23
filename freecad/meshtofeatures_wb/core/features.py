@@ -718,6 +718,44 @@ def detect_features(report: ReconstructionReport,
             ))
 
     # ---- partial cylinders -> fillets / blends -----------------------------
+    # A fillet is RELATIONAL: a blend between two faces. A partial cylinder
+    # that does not touch two (near-)planar neighbours is a curved wall, not
+    # a fillet -- claiming it spawns an unplannable feature (field: issue
+    # #5's corner bracket, whose curved diagonal band shed compromise
+    # cylinder strips with no blend planes). Two tests complement each other:
+    # (1) vertex sharing -- the segment and a plane segment share >= 2
+    # rounded vertex coordinates; (2) proximity -- the minimum pointwise
+    # distance between the two segments is under 0.5 mm. The proximity
+    # fallback handles coarse-STL tessellations and edge fillets whose blend
+    # plane normals are not strictly perpendicular to the cylinder axis
+    # (e.g. a 45-deg diagonal bracket edge between wall and floor).
+    plane_keys = [(j, report.surfaces[j]) for j in planes]
+
+    def _blend_plane_count(surf, proximity_gate: float = 0.5) -> int:
+        cyl = surf.fit.primitive
+        keys = _keys(surf.segment.points)
+        strict = 0
+        cs_pts = surf.segment.points[:, :3]
+        seen: set[int] = set()
+        for j, s in plane_keys:
+            if s is surf:
+                continue
+            if j in seen:
+                continue
+            if len(keys & _keys(s.segment.points)) >= 2:
+                strict += 1
+                seen.add(j)
+                continue
+            ps_pts = s.segment.points[:, :3]
+            d = float(np.min(np.linalg.norm(
+                cs_pts[:, None, :] - ps_pts[None, :, :], axis=2)))
+            if d < proximity_gate:
+                strict += 1
+                seen.add(j)
+            if strict == 2:
+                return 2
+        return strict
+
     for i in partial:
         if i in consumed:
             continue
@@ -726,6 +764,8 @@ def detect_features(report: ReconstructionReport,
         arc = float(np.rad2deg(u1 - u0))
         if arc > 200.0:
             continue  # more than a blend: leave unassigned
+        if _blend_plane_count(report.surfaces[i]) < 2:
+            continue  # curved wall, not a blend between two faces
         consumed.add(i)
         out.features.append(Feature(
             kind="fillet",

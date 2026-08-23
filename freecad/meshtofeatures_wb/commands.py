@@ -160,6 +160,13 @@ class RebuildBody(_BaseCommand):
                 feats = detect_features(report, patches)
                 plan = plan_history(report, feats, detect_patterns(feats),
                                     patches)
+                try:
+                    from .core.solidify import add_corrections
+                    add_corrections(plan, tm)
+                except Exception as exc:  # noqa: BLE001 - optional step
+                    App.Console.PrintWarning(
+                        f"[meshtofeatures] deviation correction "
+                        f"skipped: {exc}\n")
                 body = build.build_body(doc, plan,
                                         name=f"Rebuilt_{mesh_obj.Name}")
                 App.Console.PrintMessage(

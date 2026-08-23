@@ -296,6 +296,39 @@ check("bottom countersink body volume within 2%",
       f"{bcsbody.Shape.Volume:.2f} vs {bcs_solid.Volume:.2f}")
 check("bottom countersink body shape is valid", bcsbody.Shape.isValid())
 
+# --- regression: bottom-side hole fallback must not delete the terrace ------
+# Issue #5's bracket had BOTH a recess (terrace pocket) and a bottom-face
+# countersink. The hole's pocket-fallback cleanup used `'op' in dir()`, which
+# saw `op` leaked from the pocket loop and deleted the terrace pocket instead
+# of the (never-created) Hole -- the rebuilt body lost its recess cut and
+# ballooned ~3x. Guard: with a terrace AND a bottom-side hole present, the
+# terrace pocket must survive and the volume must match.
+tb_solid = Part.makeBox(40, 30, 14, App.Vector(-20, -15, 0)) \
+    .cut(Part.makeBox(20, 15, 5, App.Vector(-10, -7.5, 9))) \
+    .cut(Part.makeCylinder(2.5, 50, App.Vector(12, 10, -20))) \
+    .cut(Part.makeCone(5.0, 2.5, 2.5, App.Vector(12, 10, 0)))
+tbv, tbf = tb_solid.tessellate(0.05)
+tbtm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in tbv]),
+                       faces=np.array(tbf), process=True)
+tbrep = snap_report(reconstruct(tbtm)).report
+tbpatches = plan_patches(tbrep)
+tbfeats = detect_features(tbrep, tbpatches)
+tbplan = plan_history(tbrep, tbfeats, detect_patterns(tbfeats), tbpatches)
+check("terrace+bottom-hole plan has a pocket and a bottom-side hole",
+      len(tbplan.pockets) >= 1
+      and any(h.countersink_diameter and not h.from_top
+              for h in tbplan.holes),
+      f"{len(tbplan.pockets)} pockets, "
+      f"{sum(1 for h in tbplan.holes if h.countersink_diameter)} csink holes")
+tbbody = build.build_body(doc, tbplan, name="RebuiltTerraceBottomHole")
+check("terrace pocket survives the bottom-hole fallback",
+      any(o.TypeId == "PartDesign::Pocket" for o in tbbody.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in tbbody.Group})))
+check("terrace+bottom-hole body volume within 2%",
+      abs(tbbody.Shape.Volume - tb_solid.Volume) / tb_solid.Volume < 0.02,
+      f"{tbbody.Shape.Volume:.2f} vs {tb_solid.Volume:.2f}")
+check("terrace+bottom-hole body shape is valid", tbbody.Shape.isValid())
+
 # --- horizontal fillets rebuilt as PartDesign::Fillet ------------------------
 fp = Part.makeBox(40, 30, 10, App.Vector(-20, -15, 0))
 top_edges = [e for e in fp.Edges
@@ -510,6 +543,43 @@ check("cbore body volume within 5% (holes+counterbores actually cut)",
       abs(cbbody.Shape.Volume - cbp.Volume) / cbp.Volume < 0.05,
       f"{cbbody.Shape.Volume:.2f} vs {cbp.Volume:.2f}")
 check("cbore body shape is valid", cbbody.Shape.isValid())
+
+# --- deviation correction: freeform blends the feature tree cannot capture --
+# issue #5's corner bracket rebuilds +25% over-volume parametrically (its
+# diagonal band and base scoops fit no primitive); the correction pass
+# intersects the body with the source mesh and fuses back the UNDER
+# patches, closing the gap. Requires manifold3d (headless booleans).
+_fixture = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "tests", "fixtures",
+                        "Simple_Corner_Bracket.stl")
+try:
+    from freecad.meshtofeatures_wb.core.solidify import (
+        add_corrections, boolean_engine_available)
+except Exception:                                          # noqa: BLE001
+    boolean_engine_available = lambda: False               # noqa: E731
+if os.path.exists(_fixture) and boolean_engine_available():
+    brm = trimesh.load(_fixture, force="mesh")
+    brrep = snap_report(reconstruct(brm)).report
+    brpat = plan_patches(brrep)
+    brfeats = detect_features(brrep, brpat)
+    brplan = plan_history(brrep, brfeats, detect_patterns(brfeats), brpat)
+    brcorrs = add_corrections(brplan, brm)
+    check("bracket deviation corrections computed", len(brcorrs) > 0,
+          f"{len(brcorrs)} patches")
+    brbody = build.build_body(doc, brplan, name="RebuiltBracket")
+    brcorrected = doc.getObject("RebuiltBracket_Corrected") \
+        or next((o for o in doc.Objects
+                 if o.Label == "RebuiltBracket (corrected)"), None)
+    check("bracket corrected shape exists", brcorrected is not None,
+          str(brcorrected))
+    if brcorrected is not None:
+        brv = brcorrected.Shape.Volume
+        check("bracket corrected volume within 2% of the mesh",
+              abs(brv - brm.volume) / brm.volume < 0.02,
+              f"{brv:.2f} vs {brm.volume:.2f}")
+else:
+    print("SKIP bracket deviation correction "
+          "(fixture or manifold3d missing)")
 
 out = os.path.join(tempfile.gettempdir(), "meshtofeatures_smoke.FCStd")
 doc.saveAs(out)
