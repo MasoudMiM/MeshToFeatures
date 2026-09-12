@@ -20,7 +20,9 @@ import trimesh
 
 from freecad.meshtofeatures_wb.core.emission import plan_patches
 from freecad.meshtofeatures_wb.core.features import detect_features
-from freecad.meshtofeatures_wb.core.history import FilletOp, fillet_edge_matches, plan_history
+from freecad.meshtofeatures_wb.core.history import (FilletOp, blend_corner_profile,
+                                                   chamfer_corner_profile,
+                                                   fillet_edge_matches, plan_history)
 from freecad.meshtofeatures_wb.core.patterns import detect_patterns
 from freecad.meshtofeatures_wb.core.pipeline import reconstruct
 from freecad.meshtofeatures_wb.core.snapping import snap_report
@@ -134,6 +136,72 @@ class TestEdgeMatcher:
         op = self._op()
         assert fillet_edge_matches(op, np.array([20.0, -5.0, 5.0]),
                                    np.array([20.0, 10.0, 5.0]), tol=0.05)
+
+
+class TestCornerProfiles:
+    """The corner-tool cross-sections shared by the headless round-trip
+    and the executor's geometric fallback (issue #6)."""
+
+    def _chain_endpoints(self, prof):
+        """Consecutive primitives must share endpoints (a closed loop)."""
+        pts = []
+        for p in prof:
+            pts.append(np.asarray(p.start, dtype=float))
+        return pts
+
+    def test_convex_is_corner_sliver(self):
+        prof = blend_corner_profile(3.0, convex=True)
+        assert len(prof) == 3
+        pts = np.vstack([p.sample() for p in prof])
+        # confined to the (-, -) quadrant, extent exactly r
+        assert pts[:, 0].max() <= 1e-9 and pts[:, 1].max() <= 1e-9
+        assert np.isclose(pts.min(), -3.0, atol=1e-9)
+        arc = [p for p in prof if hasattr(p, "sweep")]
+        assert len(arc) == 1
+        assert np.isclose(arc[0].radius, 3.0)
+        assert np.isclose(abs(arc[0].sweep), np.pi / 2)
+        # area = square corner minus quarter disk
+        from shapely.geometry import Polygon
+        assert Polygon([tuple(p) for p in
+                        np.vstack([p.sample() for p in prof])]).area \
+            == pytest.approx(9.0 - 9.0 * np.pi / 4, rel=1e-2)
+
+    def test_concave_is_quarter_disk(self):
+        prof = blend_corner_profile(3.0, convex=False)
+        pts = np.vstack([p.sample() for p in prof])
+        # the visible arc stays in the (+, +) quadrant
+        arc_pts = np.vstack([p.sample() for p in prof
+                             if hasattr(p, "sweep")])
+        assert arc_pts.min() >= -1e-9
+        arc = [p for p in prof if hasattr(p, "sweep")][0]
+        assert np.isclose(arc.radius, 3.0)
+        assert np.isclose(abs(arc.sweep), np.pi / 2)
+        from shapely.geometry import Polygon
+        assert Polygon([tuple(p) for p in pts]).area \
+            == pytest.approx(9.0 * np.pi / 4, rel=1e-2)
+
+    def test_concave_bury_extends_legs_not_arc(self):
+        prof = blend_corner_profile(3.0, convex=False, bury=0.2)
+        lines = [p for p in prof if not hasattr(p, "sweep")]
+        arc = [p for p in prof if hasattr(p, "sweep")][0]
+        # legs reach past the origin; the arc stays exact
+        assert min(min(l.start[0], l.end[0]) for l in lines) \
+            == pytest.approx(-0.2)
+        assert min(min(l.start[1], l.end[1]) for l in lines) \
+            == pytest.approx(-0.2)
+        assert np.isclose(arc.radius, 3.0)
+
+    def test_chamfer_is_straight_triangle(self):
+        prof = chamfer_corner_profile(3.0, convex=True)
+        assert all(not hasattr(p, "sweep") for p in prof)
+        from shapely.geometry import Polygon
+        assert Polygon([tuple(p) for p in
+                        np.vstack([p.sample() for p in prof])]).area \
+            == pytest.approx(4.5, rel=1e-6)
+
+    def test_zero_size_declined(self):
+        assert blend_corner_profile(0.0, True) == []
+        assert chamfer_corner_profile(0.0, False) == []
 
 
 class TestRoundTrip:
