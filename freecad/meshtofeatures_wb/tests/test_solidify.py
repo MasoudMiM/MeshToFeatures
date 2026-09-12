@@ -101,3 +101,67 @@ class TestCompletePartNeedsNoCorrection:
             f"a fully captured part should need ~no patches, got {total:.1f}"
         corrected = apply_corrections(solid, mesh, corrs)
         assert abs(corrected.volume / mesh.volume - 1.0) < 0.01
+
+
+class TestCornerToolVolumes:
+    """The blend corner tools (issue #6's shared cross-sections) applied
+    headlessly: analytic volumes for a single blend on a plain box."""
+
+    X = np.array([1.0, 0.0, 0.0])
+    Y = np.array([0.0, 1.0, 0.0])
+    Z = np.array([0.0, 0.0, 1.0])
+
+    def _box_plan(self, op):
+        from freecad.meshtofeatures_wb.core.history import (BasePad,
+                                                            BuildPlan,
+                                                            ChamferOp,
+                                                            FilletOp,
+                                                            SketchLine)
+        profile = [
+            SketchLine(start=np.array([-20.0, -15.0]),
+                       end=np.array([20.0, -15.0])),
+            SketchLine(start=np.array([20.0, -15.0]),
+                       end=np.array([20.0, 15.0])),
+            SketchLine(start=np.array([20.0, 15.0]),
+                       end=np.array([-20.0, 15.0])),
+            SketchLine(start=np.array([-20.0, 15.0]),
+                       end=np.array([-20.0, -15.0])),
+        ]
+        return BuildPlan(
+            frame_origin=np.zeros(3), frame_x=self.X, frame_y=self.Y,
+            frame_z=self.Z, base=BasePad(profile=profile, length=10.0),
+            fillets=[op] if isinstance(op, FilletOp) else [],
+            chamfers=[] if isinstance(op, FilletOp) else [op])
+
+    def _op(self, cls, **kw):
+        base = dict(edge_start=np.array([20.0, -15.0, 10.0]),
+                    edge_end=np.array([20.0, 15.0, 10.0]),
+                    direction=self.Y.copy(), n_a=self.X.copy(),
+                    n_b=self.Z.copy(), label="band")
+        base.update(kw)
+        return cls(**base)
+
+    def test_convex_fillet_removes_sliver(self):
+        from freecad.meshtofeatures_wb.core.history import FilletOp
+        op = self._op(FilletOp, radius=3.0, convex=True)
+        solid = plan_to_mesh(self._box_plan(op))
+        assert solid is not None and solid.is_watertight
+        # sliver area (r^2 - pi r^2/4) x span 30
+        expected = 40.0 * 30.0 * 10.0 - (9.0 - 9.0 * np.pi / 4) * 30.0
+        assert solid.volume == pytest.approx(expected, rel=2e-3)
+
+    def test_concave_fillet_adds_quarter_disk(self):
+        from freecad.meshtofeatures_wb.core.history import FilletOp
+        op = self._op(FilletOp, radius=3.0, convex=False)
+        solid = plan_to_mesh(self._box_plan(op))
+        assert solid is not None and solid.is_watertight
+        expected = 40.0 * 30.0 * 10.0 + (9.0 * np.pi / 4) * 30.0
+        assert solid.volume == pytest.approx(expected, rel=2e-3)
+
+    def test_convex_chamfer_removes_wedge(self):
+        from freecad.meshtofeatures_wb.core.history import ChamferOp
+        op = self._op(ChamferOp, size=3.0)
+        solid = plan_to_mesh(self._box_plan(op))
+        assert solid is not None and solid.is_watertight
+        expected = 40.0 * 30.0 * 10.0 - 0.5 * 9.0 * 30.0
+        assert solid.volume == pytest.approx(expected, rel=2e-3)

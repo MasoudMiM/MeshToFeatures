@@ -628,6 +628,35 @@ v0.15.6 (lateral pads):
     campaign's +3.5% claim was the thin-part volume-ratio artifact of
     bucket 3) and featuretype's flange survive untouched.
 
+50. **Freeform transition bands are carried by the correction patches,
+    and their blends are dressed geometrically** (issue #6). The bracket's
+    diagonal transition band and base scoops fit no analytic primitive —
+    that is their definition, not a fitting failure. Building loft/sweep
+    machinery for one part class risks the segmentation layer (note 34's
+    false-positive surface) for a B-spline that is not design intent
+    either; the v0.17.3 decision stands: the parametric body approximates
+    the band (~1-2% under), the terminal correction pass carries the
+    mesh-accurate shape, and the boundary is documented (README). What
+    WAS fixable: the r1.5 fillets detected ON the band were dropped by
+    the executor — a `PartDesign::Fillet` dressup needs a topological
+    edge to attach to, and the parametric body has NO edge at the
+    mesh-fit sharp-edge position. The fallback dresses the blend
+    geometrically: the same corner-tool cross-section the headless
+    round-trip applies (`blend_corner_profile`, one definition shared by
+    gate and executor so they cannot drift), sketched on the plane
+    through `edge_start` perpendicular to the edge and extruded along
+    the detected span — Pocket removes the convex sliver, Pad fuses the
+    concave quarter round (legs buried 0.02·r so OCC's fuse has volume
+    contact, per note 36's doctrine; the arc itself stays exact).
+    Direction is encoded in the placement (mirrored profile), never a
+    Reversed boolean. Two field lessons: extrude_polygon yields a
+    NON-watertight mesh for clockwise loops (loop orientation is part of
+    the profile contract), and the correction pass reconciles any
+    residual against the source mesh, so a fallback whose cut lands in
+    air degrades to a clean removal, not a broken feature. Chamfers keep
+    the loud skip: their tool side needs the headless solid probe, and
+    the primary `PartDesign::Chamfer` path needs no side decision.
+
 ## Run tests
 
 ```

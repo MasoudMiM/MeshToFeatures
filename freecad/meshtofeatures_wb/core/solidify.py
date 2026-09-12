@@ -182,30 +182,22 @@ def _edge_cutter(op, shape_poly, sections: int = 48):
 
 
 def _apply_fillets(solid, plan):
-    from shapely.geometry import Polygon
+    from .history import blend_corner_profile, chamfer_corner_profile
     for op in getattr(plan, "fillets", []):
         r = float(op.radius)
+        poly = _poly_of(blend_corner_profile(r, op.convex))
         if op.convex:
-            sq = Polygon([(0, 0), (-r, 0), (-r, -r), (0, -r)])
-            ang = np.linspace(0.0, np.pi / 2, 48)
-            disk = Polygon([(-r, -r)]
-                           + [(-r + r * np.cos(t), -r + r * np.sin(t))
-                              for t in ang])
-            solid = solid.difference(_edge_cutter(op, sq.difference(disk)))
+            solid = solid.difference(_edge_cutter(op, poly))
         else:
-            ang = np.linspace(0.0, np.pi / 2, 48)
-            quad = Polygon([(0, 0)]
-                           + [(r * np.cos(t), r * np.sin(t)) for t in ang])
-            solid = solid.union(_edge_cutter(op, quad))
+            solid = solid.union(_edge_cutter(op, poly))
     for op in getattr(plan, "chamfers", []):
         s = float(op.size)
         convex = _chamfer_convexity(plan, op, solid)
+        poly = _poly_of(chamfer_corner_profile(s, convex))
         if convex:
-            tri = Polygon([(0, 0), (-s, 0), (0, -s)])
-            solid = solid.difference(_edge_cutter(op, tri))
+            solid = solid.difference(_edge_cutter(op, poly))
         else:
-            tri = Polygon([(0, 0), (s, 0), (0, s)])
-            solid = solid.union(_edge_cutter(op, tri))
+            solid = solid.union(_edge_cutter(op, poly))
     return solid
 
 

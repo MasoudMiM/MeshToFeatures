@@ -37,7 +37,8 @@ from .primitives import Cylinder, Plane
 
 __all__ = ["SketchLine", "SketchArc", "SketchCircle", "loop_to_sketch",
            "hole_op_properties", "FilletOp", "fillet_edge_matches",
-           "ChamferOp", "CrossHoleOp",
+           "ChamferOp", "CrossHoleOp", "blend_corner_profile",
+           "chamfer_corner_profile",
            "BasePad", "HoleOp", "PocketOp", "PadOp", "BuildPlan",
            "plan_history", "MAX_STEP_LEVELS"]
 
@@ -381,6 +382,85 @@ def fillet_edge_matches(op: FilletOp, p0: np.ndarray, p1: np.ndarray,
     if hi < -pad or lo > 1.0 + pad:
         return False
     return True
+
+
+def blend_corner_profile(r: float, convex: bool,
+                         bury: float = 0.0) -> list:
+    """Cross-section of a fillet's corner tool in the blend plane.
+
+    The plane is perpendicular to the edge ``direction`` through
+    ``edge_start``, spanned by the blend-plane normals (n_a, n_b); the
+    origin is the sharp edge. A CONVEX fillet (material removed) returns
+    the corner sliver in the (-n_a, -n_b) quadrant: the square corner
+    minus the quarter round -- the volume that must be cut away. A
+    CONCAVE fillet (material added) returns the quarter disk in the
+    (+n_a, +n_b) quadrant -- the volume that must be fused on.
+
+    ``bury`` (concave only) extends the two straight legs past the origin
+    into the material side by that amount: OCC will not reliably fuse a
+    solid that only touches the base along faces (the lateral-pad
+    doctrine), so the legs overlap into existing material while the arc
+    -- the visible fillet surface -- stays exact.
+
+    All loops are wound COUNTER-CLOCKWISE: ``trimesh``'s polygon
+    extrusion yields a non-watertight mesh for clockwise input (the
+    mesh-volume gate then rejects the whole plan), so loop orientation
+    is part of this function's contract.
+
+    This is the single definition of the corner geometry: the headless
+    round-trip (``solidify._apply_fillets``) and the FreeCAD executor's
+    geometric fallback both extrude it along the detected edge span.
+    """
+    r = float(r)
+    if r <= 0.0:
+        return []
+    if convex:
+        return [
+            SketchLine(start=np.array([0.0, 0.0]),
+                       end=np.array([0.0, -r])),
+            SketchArc(center=np.array([-r, -r]), radius=r,
+                      start=np.array([0.0, -r]),
+                      end=np.array([-r, 0.0]), sweep=np.pi / 2),
+            SketchLine(start=np.array([-r, 0.0]),
+                       end=np.array([0.0, 0.0])),
+        ]
+    d = float(bury)
+    return [
+        SketchLine(start=np.array([-d, -d]), end=np.array([r, -d])),
+        SketchLine(start=np.array([r, -d]), end=np.array([r, 0.0])),
+        SketchArc(center=np.array([0.0, 0.0]), radius=r,
+                  start=np.array([r, 0.0]), end=np.array([0.0, r]),
+                  sweep=np.pi / 2),
+        SketchLine(start=np.array([0.0, r]), end=np.array([-d, r])),
+        SketchLine(start=np.array([-d, r]), end=np.array([-d, -d])),
+    ]
+
+
+def chamfer_corner_profile(s: float, convex: bool,
+                           bury: float = 0.0) -> list:
+    """Cross-section of an equal-leg chamfer's corner tool, same plane
+    and conventions as :func:`blend_corner_profile` (a straight hypotenuse
+    instead of an arc)."""
+    s = float(s)
+    if s <= 0.0:
+        return []
+    if convex:
+        return [
+            SketchLine(start=np.array([0.0, 0.0]),
+                       end=np.array([-s, 0.0])),
+            SketchLine(start=np.array([-s, 0.0]),
+                       end=np.array([0.0, -s])),
+            SketchLine(start=np.array([0.0, -s]),
+                       end=np.array([0.0, 0.0])),
+        ]
+    d = float(bury)
+    return [
+        SketchLine(start=np.array([-d, -d]), end=np.array([s, -d])),
+        SketchLine(start=np.array([s, -d]), end=np.array([s, 0.0])),
+        SketchLine(start=np.array([s, 0.0]), end=np.array([0.0, s])),
+        SketchLine(start=np.array([0.0, s]), end=np.array([-d, s])),
+        SketchLine(start=np.array([-d, s]), end=np.array([-d, -d])),
+    ]
 
 
 @dataclass

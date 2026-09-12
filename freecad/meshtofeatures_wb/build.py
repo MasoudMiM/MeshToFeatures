@@ -15,7 +15,8 @@ import FreeCAD as App  # type: ignore
 import Part  # type: ignore
 
 from .core.history import (BuildPlan, SketchArc, SketchCircle,
-                               SketchLine, fillet_edge_matches,
+                               SketchLine, blend_corner_profile,
+                               chamfer_corner_profile, fillet_edge_matches,
                                hole_op_properties)
 from .core.fitting import _axis_frame
 
@@ -305,6 +306,107 @@ def _lateral_pad(doc, body, plan, pad, k):
     op.Label = pad.label or op.Name
     _apply_refine(op)
     _rollback_if_broken(doc, body, op, s)
+
+
+def _geometric_blend(doc, body, blend, k, kind):
+    """Dress a detected fillet whose sharp edge no parametric edge carries
+    (issue #6's freeform-band class).
+
+    The blend's sharp edge is reconstructed from the mesh's fits, so on a
+    freeform band (a transition surface no analytic primitive captures)
+    the parametric body can have NO edge at that position -- a
+    PartDesign::Fillet dressup has nothing to attach to and would be
+    skipped, losing the blend. Instead the same corner-tool cross-section
+    the headless round-trip applies (:func:`blend_corner_profile`) is
+    sketched on the plane through ``edge_start`` perpendicular to the
+    edge direction and extruded along the detected span: a Pocket removes
+    the convex sliver, a Pad fuses the concave quarter round. Direction
+    is encoded in the placement (mirrored profile), not a Reversed
+    boolean (field doctrine). The terminal deviation-correction pass
+    reconciles any residual against the source mesh. Returns the created
+    op (now the body tip), or None on any failure (caller reports).
+
+    Chamfers stay out of scope: their convexity needs the headless solid
+    probe, and the primary PartDesign::Chamfer path needs no edge-side
+    decision.
+    """
+    import numpy as np
+    d = np.asarray(blend.direction, dtype=float)
+    nd = float(np.linalg.norm(d))
+    na = np.asarray(blend.n_a, dtype=float)
+    nb = np.asarray(blend.n_b, dtype=float)
+    if nd < 1e-12:
+        return None
+    d = d / nd
+    na = na - (na @ d) * d
+    nna = float(np.linalg.norm(na))
+    nb = nb - (nb @ d) * d
+    nb = nb - (nb @ na) * na
+    nnb = float(np.linalg.norm(nb))
+    if nna < 1e-9 or nnb < 1e-9:
+        return None
+    na = na / nna
+    nb = nb / nnb
+    length = float(np.linalg.norm(np.asarray(blend.edge_end)
+                                  - np.asarray(blend.edge_start)))
+    if length <= 0.0:
+        return None
+    size = (float(getattr(blend, "radius", 0.0)) if kind == "fillet"
+            else float(getattr(blend, "size", 0.0)))
+    if size <= 0.0:
+        return None
+    convex = bool(getattr(blend, "convex", True))
+    # bury only the concave fuse (legs overlap into material so OCC can
+    # fuse); burying the convex CUTTER would shave the two faces.
+    bury = 0.02 * size if not convex else 0.0
+    profile = blend_corner_profile(size, convex, bury=bury) \
+        if kind == "fillet" else chamfer_corner_profile(size, convex,
+                                                       bury=bury)
+    if not profile:
+        return None
+    # A sketch plane must be right-handed: columns (x, y, z) with x cross
+    # y = z. For a Pad the sketch normal is the extrusion direction, so
+    # (na, nb, d) works as-is. A Pocket extrudes OPPOSITE the sketch
+    # normal, so the plane is flipped to (na, -nb, -d) -- which mirrors
+    # the second in-plane axis -- and the profile's second coordinate is
+    # mirrored with it, mapping to the identical 3D region.
+    v = -nb if convex else nb
+    z = -d if convex else d
+    m = App.Matrix(
+        float(na[0]), float(v[0]), float(z[0]), float(blend.edge_start[0]),
+        float(na[1]), float(v[1]), float(z[1]), float(blend.edge_start[1]),
+        float(na[2]), float(v[2]), float(z[2]), float(blend.edge_start[2]),
+        0.0, 0.0, 0.0, 1.0)
+    sk = doc.addObject("Sketcher::SketchObject", f"BlendProfile{k}")
+    body.addObject(sk)
+    sk.Placement = App.Placement(m)
+    if convex:
+        profile = _mirror_y(profile)          # v axis is -nb: mirror with it
+    # drop zero-length segments (a bury of 0 emits them; they are polygon
+    # bookkeeping, not geometry)
+    for p in list(profile):
+        if isinstance(p, SketchLine) and float(np.linalg.norm(
+                np.asarray(p.end) - np.asarray(p.start))) < 1e-9:
+            profile.remove(p)
+    _add_geometry(sk, profile)
+    sk.Visibility = False
+    op = doc.addObject("PartDesign::Pocket" if convex
+                       else "PartDesign::Pad", f"GeometricBlend{k}")
+    body.addObject(op)
+    op.Profile = sk
+    op.Length = length
+    kind_name = "fillet" if kind == "fillet" else "chamfer"
+    op.Label = (f"{kind_name} (geometric) {blend.label or op.Name}").strip()
+    _apply_refine(op)
+    broken = _rollback_if_broken(doc, body, op, sk)
+    if broken:
+        return None
+    msg = (f"[meshtofeatures] {kind_name} '{blend.label or op.Name}': no "
+           f"parametric edge at the detected position; dressed "
+           f"geometrically at the mesh-fit edge (freeform-band class)\n")
+    App.Console.PrintMessage(msg)
+    print(msg.strip())
+    return op
 
 
 def _shape_from_mesh(m):
@@ -763,8 +865,17 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                 if fillet_edge_matches(fo, p0, p1, tol):
                     names.append(f"Edge{idx + 1}")
             if not names:
+                if type_id == "PartDesign::Fillet":
+                    # No parametric edge at the detected sharp edge (the
+                    # freeform-band class, issue #6): dress it geometrically
+                    # at the mesh-fit position instead of dropping it.
+                    fb = _geometric_blend(doc, body, fo, k, "fillet")
+                    if fb is not None:
+                        prev = fb
+                        continue
                 App.Console.PrintWarning(
-                    f"[meshtofeatures] no body edge matched fillet "
+                    f"[meshtofeatures] no body edge matched "
+                    f"{type_id.rsplit('::', 1)[-1].lower()} "
                     f"'{fo.label}'; skipped\n")
                 continue
             op = doc.addObject(type_id, f"Dressup{k}")

@@ -66,6 +66,17 @@ Recognized and rebuilt on the current release:
   shapes will not reconstruct meaningfully. Spheres and tori are fitted
   by the core but not yet rebuilt as features; CONVEX cones (tapered
   bosses, draft-angled studs) are not yet a feature either.
+- **Freeform transition geometry is carried by the correction pass.**
+  Some parts blend a wall into a base through a swept, freeform
+  transition band (the Thingiverse corner bracket is the canonical
+  case). No analytic primitive fits that surface, so the parametric
+  feature tree approximates it (~1–2% volume under) while the terminal
+  deviation-correction feature carries the mesh-accurate shape —
+  hybrid modelling: edit the tree, measure the corrected feature.
+  Fillets and chamfers detected ON such a band are dressed
+  geometrically at the detected positions (labelled "(geometric)" in
+  the tree) when the parametric body has no edge there; the Report
+  view says so explicitly.
 - **Dimensional fidelity is bounded by the mesh.** Snapping tolerance is
   ~0.1% of the part diagonal; a coarse tessellation limits what can be
   recovered. Some internal recess boundaries are intentionally oversized

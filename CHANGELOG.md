@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.17.4 — unreleased
+
+Issue #6 follow-up: the corner bracket's freeform diagonal band and base
+scoops stay carried by the deviation-correction patches (documented as
+the intended answer for this geometry class), and the r1.5 band fillets
+that were detected but dropped are now rebuilt.
+
+### Added
+
+- **Geometric blend fallback in the executor.** A detected fillet whose
+  sharp edge matches no edge of the parametric body (the freeform-band
+  class: the tree approximates the band, so no edge exists at the
+  mesh-fit position) was previously skipped with a warning. The executor
+  now dresses it geometrically: the corner-tool cross-section shared with
+  the headless round-trip (`blend_corner_profile` in `core/history.py` --
+  one definition consumed by both the manifold verification gate and the
+  FreeCAD executor, so they cannot drift) is sketched on the plane
+  through the detected sharp edge, perpendicular to the edge direction,
+  and extruded along the detected span. Convex blends become a Pocket
+  (corner sliver removed), concave blends a Pad (quarter round fused,
+  legs buried 0.02·radius into the material per the lateral-pad fusion
+  doctrine; the arc itself exact). Direction is encoded in the sketch
+  placement (mirrored profile), never a `Reversed` boolean. The op is
+  labelled "(geometric)" and the Report view records the fallback
+  loudly. The terminal deviation-correction pass reconciles any residual
+  against the source mesh. Chamfers keep the loud skip (their tool side
+  needs the headless solid probe).
+- **Corner-tool cross-section builders** `blend_corner_profile` /
+  `chamfer_corner_profile` in `core/history.py`, replacing the
+  hand-built shapely polygons inside `solidify._apply_fillets`.
+  All loops are wound counter-clockwise: `trimesh`'s polygon extrusion
+  yields a non-watertight mesh for clockwise input, which the volume
+  gate then rejects wholesale.
+- **Documentation of the freeform-geometry boundary** (README
+  limitations, design note 50): freeform transition bands and scoops fit
+  no analytic primitive by definition; the parametric tree approximates
+  them, the correction patches carry the mesh-accurate shape, and blends
+  detected on such surfaces are dressed geometrically at their detected
+  positions.
+
+### Tests
+
+- `test_fillet_ops.py::TestCornerProfiles` -- closed-loop, extent, area,
+  and arc-radius checks for both builders (convex sliver, concave
+  quarter disk, burial legs, straight-leg chamfer).
+- `test_solidify.py::TestCornerToolVolumes` -- analytic volume gates for
+  a single blend applied headlessly to a plain box (convex fillet,
+  concave fillet, convex chamfer), pinning the refactored
+  `_apply_fillets`.
+- `test_blend_fallback.py` -- stubbed-FreeCAD executor wiring: unmatched
+  convex fillet -> Pocket with the detected span and the
+  `(n_a, -n_b, -d)` placement; unmatched concave fillet -> Pad with
+  `(n_a, n_b, d)` and buried legs; matched edge -> primary
+  `PartDesign::Fillet` path wins; unmatched chamfer and degenerate
+  blends still report loudly without creating ops; two-fillet chain
+  continues after fallbacks.
+
 ## 0.17.3 — 2026-08-22
 
 Reconstruction-robustness release, prompted by a field report of a
