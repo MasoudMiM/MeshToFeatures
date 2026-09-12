@@ -340,13 +340,25 @@ def _geometric_blend(doc, body, blend, k, kind):
     d = d / nd
     na = na - (na @ d) * d
     nna = float(np.linalg.norm(na))
+    if nna < 1e-9:
+        return None
+    na = na / nna
     nb = nb - (nb @ d) * d
     nb = nb - (nb @ na) * na
     nnb = float(np.linalg.norm(nb))
-    if nna < 1e-9 or nnb < 1e-9:
+    if nnb < 1e-9:
         return None
-    na = na / nna
     nb = nb / nnb
+    # The sketch plane must be RIGHT-HANDED: App.Placement silently negates
+    # a left-handed rotation (R -> R*(-I)) instead of failing, which would
+    # extrude the blend along -d and mirror it into the wrong quadrant
+    # (field-verified: the concave pad fused a blob off the part, the
+    # convex pocket cut air). The neighbour order in _fillet_op is
+    # arbitrary, so n_a x n_b = +-d both occur; the corner profiles are
+    # symmetric under the n_a/n_b swap, so swapping changes nothing but
+    # the handedness.
+    if float(np.dot(np.cross(na, nb), d)) < 0.0:
+        na, nb = nb, na
     length = float(np.linalg.norm(np.asarray(blend.edge_end)
                                   - np.asarray(blend.edge_start)))
     if length <= 0.0:

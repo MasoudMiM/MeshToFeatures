@@ -195,9 +195,11 @@ class TestGeometricBlendFallback:
         assert sk is not None
         A = sk.Placement.matrix.A
         # Pocket plane: (n_a, -n_b, -d) at edge_start -- the pocket cuts
-        # along +d (edge_start -> edge_end), opposite the sketch normal
-        assert np.allclose(A[:3, 0], X, atol=1e-9)
-        assert np.allclose(A[:3, 1], -Z, atol=1e-9)
+        # along +d (edge_start -> edge_end), opposite the sketch normal.
+        # The test fillet's order is LEFT-handed (X x Z = -Y = -d), so the
+        # executor swaps n_a/n_b first: the plane is (Z, -X, -Y).
+        assert np.allclose(A[:3, 0], Z, atol=1e-9)
+        assert np.allclose(A[:3, 1], -X, atol=1e-9)
         assert np.allclose(A[:3, 2], -Y, atol=1e-9)
         assert np.allclose(A[:3, 3], [20.0, -15.0, 20.0], atol=1e-9)
         # profile: the mirrored corner sliver (two lines + one arc)
@@ -220,13 +222,41 @@ class TestGeometricBlendFallback:
 
         sk = doc.objects.get("BlendProfile0")
         A = sk.Placement.matrix.A
-        # Pad plane: (n_a, n_b, d), unmirrored, normal = +d
-        assert np.allclose(A[:3, 0], X, atol=1e-9)
-        assert np.allclose(A[:3, 1], Z, atol=1e-9)
+        # Pad plane: (n_a, n_b, d), unmirrored, normal = +d. Left-handed
+        # test order (X x Z = -d) is swapped to (Z, X, Y) first.
+        assert np.allclose(A[:3, 0], Z, atol=1e-9)
+        assert np.allclose(A[:3, 1], X, atol=1e-9)
         assert np.allclose(A[:3, 2], Y, atol=1e-9)
         # legs buried 0.02 * radius past the origin (fuse doctrine)
         starts = [g[1] for g in sk.geometry if g[0] == "line"]
         assert min(v.y for v in starts) == pytest.approx(-0.06)
+
+    def test_plane_is_right_handed_for_both_neighbour_orders(self,
+                                                            monkeypatch):
+        # _fillet_op collects the two neighbour normals in surface order,
+        # so n_a x n_b = +-d both occur in the field. App.Placement
+        # silently negates a left-handed rotation (R -> R*(-I)), which
+        # would extrude the blend along -d into the wrong quadrant -- so
+        # the executor must normalize the order. Both orderings of the
+        # SAME physical fillet must yield the identical plane.
+        build = _install_stubs(monkeypatch)
+        planes = []
+        for na, nb in ((X, Z), (Z, X)):
+            doc = FakeDoc()
+            f = FilletOp(radius=3.0,
+                         edge_start=np.array([20.0, -15.0, 20.0]),
+                         edge_end=np.array([20.0, 15.0, 20.0]),
+                         direction=Y.copy(), n_a=na.copy(),
+                         n_b=nb.copy(), convex=True, label="band edge")
+            build.build_body(doc, _box_plan([f]), name="Rebuilt")
+            sk = doc.objects.get("BlendProfile0")
+            assert sk is not None
+            A = sk.Placement.matrix.A
+            # right-handed: col0 x col1 = col2
+            assert np.allclose(np.cross(A[:3, 0], A[:3, 1]), A[:3, 2],
+                               atol=1e-9)
+            planes.append(A[:3, :3])
+        assert np.allclose(planes[0], planes[1], atol=1e-9)
 
     def test_matched_edge_uses_primary_dressup(self, monkeypatch):
         build = _install_stubs(monkeypatch)

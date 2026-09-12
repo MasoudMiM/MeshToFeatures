@@ -40,6 +40,19 @@ that were detected but dropped are now rebuilt.
   detected on such surfaces are dressed geometrically at their detected
   positions.
 
+### Fixed
+
+- **Geometric fallback sketch-plane handedness.** `App.Placement`
+  silently negates a left-handed rotation matrix (R -> R*(-I)) instead of
+  failing, so a fillet whose detected normals happened to order as
+  `n_a x n_b = -direction` (the `_fillet_op` neighbour order is
+  arbitrary) would have been dressed on the mirrored plane: the convex
+  pocket cut air and the concave pad fused its quarter round off the
+  part, both without error. The executor now swaps `n_a`/`n_b` when the
+  frame is left-handed (the corner profiles are symmetric under the
+  swap, so the dressed region is unchanged) and orthonormalizes `n_a`
+  before projecting `n_b`, matching the headless `_edge_cutter`.
+
 ### Tests
 
 - `test_fillet_ops.py::TestCornerProfiles` -- closed-loop, extent, area,
@@ -55,7 +68,8 @@ that were detected but dropped are now rebuilt.
   `(n_a, n_b, d)` and buried legs; matched edge -> primary
   `PartDesign::Fillet` path wins; unmatched chamfer and degenerate
   blends still report loudly without creating ops; two-fillet chain
-  continues after fallbacks.
+  continues after fallbacks; both neighbour orderings of the same
+  physical fillet yield the identical right-handed plane.
 
 ## 0.17.3 — 2026-08-22
 

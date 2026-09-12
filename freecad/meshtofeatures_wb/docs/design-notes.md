@@ -656,6 +656,15 @@ v0.15.6 (lateral pads):
     air degrades to a clean removal, not a broken feature. Chamfers keep
     the loud skip: their tool side needs the headless solid probe, and
     the primary `PartDesign::Chamfer` path needs no side decision.
+    Third field lesson: `App.Placement(matrix)` does NOT reject a
+    left-handed rotation -- it silently negates it (R -> R*(-I)),
+    mirroring the whole plane. Since `_fillet_op`'s neighbour order is
+    arbitrary, `n_a x n_b = +-d` both occur; the executor swaps
+    n_a/n_b to force a right-handed frame (the corner profiles are
+    symmetric under the swap, so the dressed region is unchanged).
+    Verified in FreeCAD 1.1.3: unswapped, the concave pad fused its
+    quarter round 10 mm BELOW the part and the convex pocket cut air,
+    both with the op "succeeding".
 
 ## Run tests
 
