@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.17.4 — unreleased
+## 0.17.4 — 2026-09-12
 
 Issue #6 follow-up: the corner bracket's freeform diagonal band and base
 scoops stay carried by the deviation-correction patches (documented as

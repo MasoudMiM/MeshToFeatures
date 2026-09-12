@@ -26,7 +26,7 @@ from .solidify import (CorrectionOp, add_corrections, apply_corrections,
                        boolean_engine_available, plan_corrections,
                        plan_to_mesh)
 
-__version__ = "0.17.3"
+__version__ = "0.17.4"
 __all__ = [
     "Plane", "Sphere", "Cylinder", "Cone", "Primitive",
     "FitResult", "fit_plane", "fit_sphere", "fit_cylinder", "fit_cone", "fit_best",
