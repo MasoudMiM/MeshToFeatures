@@ -58,16 +58,21 @@ def boolean_engine_available() -> bool:
 
 def _poly_of(profile, holes=()):
     from shapely.geometry import Polygon
-    pts = []
-    for p in profile:
-        pts.extend(p.sample())
-    rings = []
-    for h in holes:
-        hp = []
-        for p in h:
-            hp.extend(p.sample())
-        rings.append(hp)
-    return Polygon(pts, rings)
+
+    def ring(parts):
+        # drop zero-length segments (a bury of 0 emits them; they are
+        # polygon bookkeeping, not geometry) -- consecutive duplicate
+        # ring points make the manifold3d extrusion non-watertight
+        pts = []
+        for p in parts:
+            for q in p.sample():
+                if pts and float(np.linalg.norm(np.asarray(q)
+                                                - np.asarray(pts[-1]))) < 1e-12:
+                    continue
+                pts.append(q)
+        return pts
+
+    return Polygon(ring(profile), [ring(h) for h in holes])
 
 
 def _extrude(poly, z0, height):
