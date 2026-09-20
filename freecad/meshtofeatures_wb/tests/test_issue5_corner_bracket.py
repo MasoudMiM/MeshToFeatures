@@ -93,3 +93,71 @@ class TestCornerBracket:
             "no blend feature recognized on the bracket"
         assert (len(plan.fillets) + len(plan.chamfers)
                 + plan.absorbed_features) >= 1
+
+
+class TestDegenerateFilletFrames:
+    """Issue #8: the diagonal band fillets' neighbour search could find
+    two segments of the same face (n_a == n_b) or a face that only
+    touches the band at its end -- a frame under which the executor's
+    orthonormalisation collapses and the blend is undressable. Such
+    blends must never be emitted as FilletOps; they are reported as
+    undressable instead of silently absent."""
+
+    def test_no_planned_fillet_has_degenerate_frame(self):
+        mesh = _load()
+        _, _, plan = _full(mesh)
+        for op in plan.fillets:
+            d = np.asarray(op.direction, dtype=float)
+            d = d / np.linalg.norm(d)
+            cross = np.cross(np.asarray(op.n_a, dtype=float),
+                             np.asarray(op.n_b, dtype=float))
+            assert abs(float(cross @ d)) > 0.1, \
+                f"undressable frame planned for {op.label}: " \
+                f"(n_a x n_b) . d = {float(cross @ d):.4f}"
+
+    def test_diagonal_band_fillets_not_silently_dropped(self):
+        # Every detected fillet feature must be accounted for: planned
+        # (dressable frame), undressable (degenerate frame), absorbed
+        # (vertical, in the base profile), or consumed by a pattern --
+        # never silently unplanned.
+        mesh = _load()
+        _, feats, plan = _full(mesh)
+        n = len(feats.by_kind("fillet"))
+        assert n >= 4, "expected the bracket's diagonal band fillets"
+        accounted = len(plan.fillets) + len(plan.undressable)
+        assert accounted <= n
+        assert n - accounted <= plan.absorbed_features
+        assert plan.unplanned == []
+        assert len(plan.fillets) >= 1, "all fillets rejected"
+
+    def test_undressable_reported_in_result_lines(self, monkeypatch):
+        import sys
+        import types
+        # ui.py imports FreeCAD/FreeCADGui/PySide at module level;
+        # result_lines itself is pure, so bare stubs suffice
+        monkeypatch.setitem(sys.modules, "FreeCAD", types.ModuleType("FreeCAD"))
+        monkeypatch.setitem(sys.modules, "FreeCADGui",
+                            types.ModuleType("FreeCADGui"))
+        pyside = types.ModuleType("PySide")
+        qcore = types.ModuleType("PySide.QtCore")
+        qcore.QObject = object          # _Runner subclasses it at import
+        qcore.QTimer = object
+        pyside.QtCore = qcore
+        pyside.QtWidgets = types.ModuleType("PySide.QtWidgets")
+        monkeypatch.setitem(sys.modules, "PySide", pyside)
+        monkeypatch.setitem(sys.modules, "PySide.QtCore", qcore)
+        monkeypatch.setitem(sys.modules, "PySide.QtWidgets",
+                            pyside.QtWidgets)
+        from freecad.meshtofeatures_wb.ui import result_lines
+        mesh = _load()
+        report = snap_report(reconstruct(mesh)).report
+        patches = plan_patches(report)
+        feats = detect_features(report, patches)
+        plan = plan_history(report, feats, detect_patterns(feats), patches)
+        if not plan.undressable:
+            pytest.skip("no undressable blends in this environment")
+        res = {"report": report, "actions": [], "patches": patches,
+               "features": feats, "patterns": detect_patterns(feats),
+               "plan": plan, "plan_error": None}
+        lines = result_lines(res)
+        assert any("UNDRASSABLE" in ln for ln in lines), lines

@@ -163,16 +163,24 @@ def _frame_matrix(plan) -> np.ndarray:
 
 def _edge_cutter(op, shape_poly, sections: int = 48):
     """Extrude ``shape_poly`` (2D in the edge-cross-section plane) along a
-    FilletOp/ChamferOp's edge; returns the positioned solid."""
+    FilletOp/ChamferOp's edge; returns the positioned solid, or None when
+    the op's frame is degenerate (issue #8: n_b in span(n_a, d) -- the
+    same condition the FreeCAD executor's geometric fallback guards)."""
     d = np.asarray(op.direction, dtype=float)
     d = d / np.linalg.norm(d)
     na = np.asarray(op.n_a, dtype=float)
     nb = np.asarray(op.n_b, dtype=float)
     na = na - (na @ d) * d
-    na /= np.linalg.norm(na)
+    nna = float(np.linalg.norm(na))
+    if nna < 1e-9:
+        return None
+    na = na / nna
     nb = nb - (nb @ d) * d
     nb = nb - (nb @ na) * na
-    nb /= np.linalg.norm(nb)
+    nnb = float(np.linalg.norm(nb))
+    if nnb < 1e-9:
+        return None
+    nb = nb / nnb
     length = float(np.linalg.norm(np.asarray(op.edge_end)
                                   - np.asarray(op.edge_start)))
     m = trimesh.creation.extrude_polygon(shape_poly, height=length,
@@ -191,18 +199,24 @@ def _apply_fillets(solid, plan):
     for op in getattr(plan, "fillets", []):
         r = float(op.radius)
         poly = _poly_of(blend_corner_profile(r, op.convex))
+        cutter = _edge_cutter(op, poly)
+        if cutter is None:
+            continue          # degenerate frame: nothing to dress
         if op.convex:
-            solid = solid.difference(_edge_cutter(op, poly))
+            solid = solid.difference(cutter)
         else:
-            solid = solid.union(_edge_cutter(op, poly))
+            solid = solid.union(cutter)
     for op in getattr(plan, "chamfers", []):
         s = float(op.size)
         convex = _chamfer_convexity(plan, op, solid)
         poly = _poly_of(chamfer_corner_profile(s, convex))
+        cutter = _edge_cutter(op, poly)
+        if cutter is None:
+            continue          # degenerate frame: nothing to dress
         if convex:
-            solid = solid.difference(_edge_cutter(op, poly))
+            solid = solid.difference(cutter)
         else:
-            solid = solid.union(_edge_cutter(op, poly))
+            solid = solid.union(cutter)
     return solid
 
 

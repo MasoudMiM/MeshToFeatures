@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.17.5 — unreleased
+
+Issue #8: `_fillet_op` could emit FilletOps with degenerate frames. The
+neighbour loop stopped at the first two adjacent planes in iteration
+order, which on the corner bracket's freeform diagonal band could be two
+segments of the SAME face (`n_a == n_b`) or a face that merely touches
+the band at its end. The executor's orthonormalisation collapses on such
+frames (`n_b` in span(`n_a`, `d`)) and declines the blend, while the
+headless round-trip silently applied a garbage corner tool.
+
+### Fixed
+
+- **Degenerate fillet frames (issue #8).** `_fillet_op` now collects ALL
+  adjacent plane candidates, deduplicates (nearly) identical outward
+  normals (the same face or segments of it), and re-searches for the
+  first pair whose reconstructed sharp edge (`n_a x n_b`) runs along the
+  band axis: `|(n_a x n_b) . d| > 0.1` — exactly the condition under
+  which the executor's orthonormalisation does not collapse, so
+  detection and executor cannot disagree about dressability. A blend
+  with no dressable pair is no longer emitted as a FilletOp: it is
+  reported in the new `plan.undressable` list and the Report view shows
+  "UNDRASSABLE: ... (detected, undressable: degenerate frame)" instead
+  of a silent absence.
+- **Headless round-trip guard.** `solidify._edge_cutter` returns None
+  for a degenerate frame and `_apply_fillets` skips it, mirroring the
+  executor's `nnb < 1e-9` guard — no garbage corner tools from
+  hand-built plans.
+- **`_poly_of` zero-length drop.** Consecutive duplicate ring points (a
+  `bury` of 0 emits them) made the manifold3d polygon extrusion
+  non-watertight, failing the concave corner-tool volume test on
+  triangulation engines that do not tolerate duplicate vertices; the
+  headless path now drops zero-length segments like the executor's
+  sketch path already does.
+
+### Tests
+
+- `test_fillet_ops.py::TestDressableNeighbourPair` — same face twice
+  rejected, collapsing pair rejected, re-search past a degenerate pair,
+  standard corner accepted, faceted chain not over-deduped.
+- `test_issue5_corner_bracket.py::TestDegenerateFilletFrames` — no
+  planned fillet on the bracket carries a degenerate frame; every
+  detected fillet feature is accounted for (planned / undressable /
+  absorbed, never silently unplanned); undressable blends appear in the
+  Report view lines.
+
 ## 0.17.4 — 2026-09-12
 
 Issue #6 follow-up: the corner bracket's freeform diagonal band and base
