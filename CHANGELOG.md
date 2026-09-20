@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.17.5 — unreleased
+## 0.17.5 — 2026-09-20
 
 Issue #8: `_fillet_op` could emit FilletOps with degenerate frames. The
 neighbour loop stopped at the first two adjacent planes in iteration
