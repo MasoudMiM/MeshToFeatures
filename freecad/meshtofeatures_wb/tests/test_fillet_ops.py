@@ -20,9 +20,12 @@ import trimesh
 
 from freecad.meshtofeatures_wb.core.emission import plan_patches
 from freecad.meshtofeatures_wb.core.features import detect_features
-from freecad.meshtofeatures_wb.core.history import (FilletOp, blend_corner_profile,
-                                                   chamfer_corner_profile,
-                                                   fillet_edge_matches, plan_history)
+from freecad.meshtofeatures_wb.core.history import (FilletOp,
+                                                    _dressable_neighbour_pair,
+                                                    blend_corner_profile,
+                                                    chamfer_corner_profile,
+                                                    fillet_edge_matches,
+                                                    plan_history)
 from freecad.meshtofeatures_wb.core.patterns import detect_patterns
 from freecad.meshtofeatures_wb.core.pipeline import reconstruct
 from freecad.meshtofeatures_wb.core.snapping import snap_report
@@ -202,6 +205,58 @@ class TestCornerProfiles:
     def test_zero_size_declined(self):
         assert blend_corner_profile(0.0, True) == []
         assert chamfer_corner_profile(0.0, False) == []
+
+
+class TestDressableNeighbourPair:
+    """Issue #8: neighbour-pair selection for a blend band along ``d``.
+
+    The old first-two stop could take two segments of the SAME face
+    (identical outward normals) or a face that only touches the band at
+    its end -- frames under which the executor's orthonormalisation
+    collapses (n_b in span(n_a, d)) and the blend is undressable."""
+
+    def test_same_face_twice_is_rejected(self):
+        # two segments of one face: identical outward normals
+        n = np.array([0.0, -0.7071, 0.7071])
+        d = np.array([0.0, 0.7071, 0.7071])
+        assert _dressable_neighbour_pair([n.copy(), n.copy()], d) is None
+
+    def test_collapsing_pair_is_rejected(self):
+        # top flat + 45-deg face: n_b lies in span(n_a, d), so the
+        # reconstructed edge (n_a x n_b) is perpendicular to the band
+        na = np.array([0.0, 0.0, 1.0])
+        nb = np.array([0.0, -0.7071, 0.7071])
+        d = np.array([0.0, 0.7071, 0.7071])
+        assert _dressable_neighbour_pair([na, nb], d) is None
+
+    def test_researches_past_degenerate_pair(self):
+        # the first two candidates are the same face; a valid third face
+        # exists and must be found (re-search, not just reject)
+        n45 = np.array([0.0, -0.7071, 0.7071])
+        nx = np.array([1.0, 0.0, 0.0])
+        d = np.array([0.0, 0.7071, 0.7071])
+        pair = _dressable_neighbour_pair([n45.copy(), n45.copy(), nx], d)
+        assert pair is not None
+        na, nb = pair
+        assert float(na @ d) < 0.1 and float(nb @ d) < 0.1
+
+    def test_standard_corner_accepted(self):
+        # the canonical horizontal fillet: top + side, band along y
+        na = np.array([0.0, 0.0, 1.0])
+        nb = np.array([1.0, 0.0, 0.0])
+        d = np.array([0.0, 1.0, 0.0])
+        pair = _dressable_neighbour_pair([na, nb], d)
+        assert pair is not None
+
+    def test_faceted_chain_not_over_deduped(self):
+        # a curved transition faceted into segments: consecutive normals
+        # ~13 deg apart are DISTINCT faces and must not be deduplicated
+        c0 = np.array([0.7011, -0.7011, 0.1305])
+        c1 = np.array([0.6533, -0.6533, 0.3827])
+        d = np.array([-1.0, 0.0, 0.0])
+        pair = _dressable_neighbour_pair([c0, c1], d)
+        assert pair is not None
+        assert float(pair[0] @ pair[1]) < 0.9999
 
 
 class TestRoundTrip:

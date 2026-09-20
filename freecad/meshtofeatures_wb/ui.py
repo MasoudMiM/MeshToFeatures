@@ -85,6 +85,9 @@ def result_lines(res: dict) -> list[str]:
         for item in getattr(plan, "unplanned", []):
             lines.append(f"NOT REBUILT: {item} (outside the single-axis "
                          f"prismatic model)")
+        for item in getattr(plan, "undressable", []):
+            lines.append(f"UNDRASSABLE: {item} (detected, undressable: "
+                         f"degenerate frame)")
         if feats.unassigned:
             lines.append(f"{len(feats.unassigned)} surfaces belong to no "
                          f"recognized feature (e.g. chamfers) and are not "

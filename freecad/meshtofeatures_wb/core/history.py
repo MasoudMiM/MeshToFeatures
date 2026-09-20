@@ -538,6 +538,10 @@ class BuildPlan:
     cones: list[ConeOp] = field(default_factory=list)
     absorbed_features: int = 0
     unplanned: list[str] = field(default_factory=list)
+    #: detected blends with no dressable neighbour pair (degenerate
+    #: frame, issue #8): reported so they are not silently absent from
+    #: the Report view
+    undressable: list[str] = field(default_factory=list)
     #: labels of PocketOps synthesized from exposed multi-level tops
     step_labels: list[str] = field(default_factory=list)
     #: deviation-correction patches (solidify.CorrectionOp): watertight
@@ -1059,7 +1063,9 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
             if op is not None:
                 plan.fillets.append(op)
             else:
-                plan.unplanned.append(f.description)
+                # detected, but no dressable neighbour pair (issue #8):
+                # a distinct category, not "outside the model"
+                plan.undressable.append(f.description)
         else:
             plan.unplanned.append(f.description)
 
@@ -2279,19 +2285,54 @@ def _chamfer_op(report, f) -> ChamferOp | None:
                      direction=d, n_a=n_a, n_b=n_b, label=f.description)
 
 
+def _dressable_neighbour_pair(candidates, d):
+    """Pick the first pair of neighbour normals spanning a dressable frame
+    for a blend band along axis ``d`` (issue #8); None when none exists.
+
+    Candidates with (nearly) identical outward normals are the same face
+    (or segments of it) and are deduplicated first -- the old first-two
+    stop could take two segments of ONE face, a degenerate pair with no
+    corner to dress. A pair is dressable when the reconstructed sharp
+    edge (n_a x n_b) runs along the band axis: |(n_a x n_b) . d| ~ 0 is
+    exactly the condition under which the executor's orthonormalisation
+    collapses (n_b in span(n_a, d)) and the geometric fallback declines
+    the blend.
+    """
+    distinct = []
+    for n in candidates:
+        if any(float(n @ m) > 1.0 - 1e-4 for m in distinct):
+            continue
+        distinct.append(n)
+    for i in range(len(distinct)):
+        for j in range(i + 1, len(distinct)):
+            na, nb = distinct[i], distinct[j]
+            if float(abs(np.cross(na, nb) @ d)) > 0.1:
+                return na, nb
+    return None
+
+
 def _fillet_op(report, patches, f, z_dir) -> FilletOp | None:
     """Build a FilletOp for a non-vertical fillet by locating the two
-    blended planes and reconstructing the sharp edge they would form."""
+    blended planes and reconstructing the sharp edge they would form.
+
+    Returns None when no dressable neighbour pair exists (issue #8); the
+    caller then reports the blend as detected-but-undressable instead of
+    emitting a FilletOp whose frame the executor cannot use."""
     from .primitives import Plane
 
     ci = f.surface_indices[0]
     seg = report.surfaces[ci].segment
     cyl = report.surfaces[ci].fit.primitive
-    d = cyl.axis
+    d = np.asarray(cyl.axis, dtype=float)
+    d = d / np.linalg.norm(d)
     fkeys = _keys(seg.points)
 
-    neighbours = []
-    for j, s in enumerate(report.surfaces):
+    # candidate neighbour planes: not near-parallel to the band axis,
+    # touching the band (shared vertices or proximity). ALL of them are
+    # collected so a degenerate early pair can be re-searched past
+    # (issue #8).
+    candidates = []
+    for s in report.surfaces:
         if not isinstance(s.fit.primitive, Plane):
             continue
         outward = s.fit.primitive.normal.copy()
@@ -2300,17 +2341,17 @@ def _fillet_op(report, patches, f, z_dir) -> FilletOp | None:
         if abs(float(outward @ d)) > 0.75:
             continue  # end caps (near-parallel) or heavily tilted faces
         if len(fkeys & _keys(s.segment.points)) >= 2:
-            neighbours.append(outward)
+            candidates.append(outward)
         elif float(np.min(
                 np.linalg.norm(seg.points[:, :3, None]
                                - s.segment.points[:, :3].T, axis=1))) < 0.5:
-            neighbours.append(outward)
-        if len(neighbours) == 2:
-            break
-    if len(neighbours) != 2:
-        return None
+            candidates.append(outward)
 
-    n_a, n_b = neighbours
+    pair = _dressable_neighbour_pair(candidates, d)
+    if pair is None:
+        return None
+    n_a, n_b = pair
+
     sign = 1.0 if f.params.get("convex", True) else -1.0
     shift = sign * cyl.radius * (n_a + n_b)
     v0, v1 = patches[ci].v_range

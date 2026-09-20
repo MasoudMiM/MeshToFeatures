@@ -662,9 +662,34 @@ v0.15.6 (lateral pads):
     arbitrary, `n_a x n_b = +-d` both occur; the executor swaps
     n_a/n_b to force a right-handed frame (the corner profiles are
     symmetric under the swap, so the dressed region is unchanged).
-    Verified in FreeCAD 1.1.3: unswapped, the concave pad fused its
-    quarter round 10 mm BELOW the part and the convex pocket cut air,
-    both with the op "succeeding".
+     Verified in FreeCAD 1.1.3: unswapped, the concave pad fused its
+     quarter round 10 mm BELOW the part and the convex pocket cut air,
+     both with the op "succeeding".
+
+ 51. **A fillet frame is dressable iff (n_a x n_b) runs along the band
+     axis** (issue #8). `_fillet_op` reconstructs the sharp edge from the
+     two neighbour planes the blend touches; the old loop stopped at the
+     FIRST two adjacent planes in iteration order, which on the bracket's
+     freeform diagonal band could be two segments of the SAME face
+     (n_a == n_b) or a face that merely touches the band at its end
+     (proximity < 0.5 mm, e.g. the top flat at the band's end vertex).
+     Both yield a frame under which the executor's orthonormalisation
+     collapses — n_b in span(n_a, d), i.e. (n_a x n_b) . d == 0 — and the
+     geometric fallback declines with `nnb < 1e-9`, while the headless
+     round-trip silently applied a garbage corner tool (0/1e-6 is a unit
+     vector in a noise direction). The fix collects ALL candidates,
+     deduplicates (nearly) identical outward normals (same face /
+     segments of it; a faceted curved transition keeps ~13-deg-apart
+     normals distinct), and re-searches for the first pair with
+     |(n_a x n_b) . d| > 0.1 — exactly the non-collapse condition, so
+     detection and executor can never disagree about dressability. A
+     per-face |n . d| bound was rejected: the bracket's dressable bottom
+     fillets legitimately carry a 45-degree-tilted neighbour
+     (|n . d| = 0.707) with a perfectly good frame. Blends with no
+     dressable pair are reported in `plan.undressable` and the Report
+     view shows "UNDRASSABLE: ... (detected, undressable: degenerate
+     frame)" — counted, not silently absent. `solidify._edge_cutter`
+     carries the same guard so hand-built plans degrade to a skip.
 
 ## Run tests
 
