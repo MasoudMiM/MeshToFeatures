@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.17.6 — unreleased
+## 0.17.6 — 2026-09-27
 
 Issue #7: the `Rebuilt (corrected)` Part::Feature installed by the
 terminal deviation-correction pass could be an invalid `Part.Compound`
