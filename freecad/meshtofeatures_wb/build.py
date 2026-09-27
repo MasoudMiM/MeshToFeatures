@@ -14,11 +14,18 @@ import math
 import FreeCAD as App  # type: ignore
 import Part  # type: ignore
 
+from .core.conditioning import repair_solid
 from .core.history import (BuildPlan, SketchArc, SketchCircle,
                                SketchLine, blend_corner_profile,
                                chamfer_corner_profile, fillet_edge_matches,
                                hole_op_properties)
 from .core.fitting import _axis_frame
+
+# The Part volume of a mesh-converted shape must agree with the trimesh
+# volume within this relative tolerance, or the conversion is flagged
+# (issue #7): an invalid closed shell still integrates a "volume" and on
+# debris-laden boolean output it was off by 3%.
+_VOLUME_GATE = 0.01
 
 
 def _placement(plan: BuildPlan, z_offset: float,
@@ -425,10 +432,15 @@ def _shape_from_mesh(m):
     """A watertight trimesh -> Part solid, one planar face per triangle.
 
     Used for deviation-correction patches and the source-mesh intersection.
-    Built via makePolygon/makeShell (the documented API): ``Part.Shape``
-    fed a raw facet list crashes FreeCAD 1.1 outright. Raises on failure
-    so the caller can degrade.
+    The mesh is first normalized with :func:`repair_solid` (issue #7:
+    boolean output carries ~zero-volume sliver components and cracked
+    edges that make the OCC shell topologically invalid), then built via
+    makePolygon/makeShell (the documented API): ``Part.Shape`` fed a raw
+    facet list crashes FreeCAD 1.1 outright. Raises on failure so the
+    caller can degrade.
     """
+    m, _rep = repair_solid(m)
+    mesh_volume = abs(float(m.volume))
     verts = m.vertices
     faces = []
     for tri in m.faces:
@@ -447,13 +459,33 @@ def _shape_from_mesh(m):
     except Exception:                                      # noqa: BLE001
         out = sh
     if not out.isValid():
-        # boolean output carries micro-slivers that fail OCC's BRep check
-        # without affecting the geometry; fix() heals them (volume-
-        # preserving, verified on the issue-#5 bracket)
+        # Retry from a tolerance-sewn shell: stitching with an explicit
+        # tolerance bridges the micro-cracks that defeat plain
+        # Part.Solid on debris-laden shells (issue #7).
         try:
-            out.fix(0.0, 0.1, 0.1)
+            out = Part.Solid(sh.sewShape(1e-3))
         except Exception:                                  # noqa: BLE001
             pass
+        if not out.isValid():
+            # boolean output carries micro-slivers that fail OCC's BRep
+            # check without affecting the geometry; fix() heals them
+            # (volume-preserving, verified on the issue-#5 bracket)
+            try:
+                out.fix(0.0, 0.1, 0.1)
+            except Exception:                              # noqa: BLE001
+                pass
+    # Volume gate: the BRep volume must agree with the trimesh volume, or
+    # the "solid" is silently wrong (issue #7) -- a loud warning, not a
+    # quiet 3%-under Compound.
+    part_volume = abs(float(getattr(out, "Volume", 0.0)))
+    if mesh_volume > 0.0:
+        drift = abs(part_volume - mesh_volume) / mesh_volume
+        if drift > _VOLUME_GATE:
+            App.Console.PrintWarning(
+                f"[meshtofeatures] volume gate: Part volume "
+                f"{part_volume:.1f} deviates {100 * drift:.2f}% from mesh "
+                f"volume {mesh_volume:.1f} -- the corrected solid is "
+                f"likely invalid; check the Report view\n")
     return out
 
 
@@ -486,8 +518,9 @@ def _apply_corrections(doc, body, plan: BuildPlan, name: str):
         feat.Label = name + " (corrected)"
         App.Console.PrintMessage(
             f"[meshtofeatures] deviation correction applied; "
-            f"corrected volume {shape.Volume:.1f} "
-            f"(mesh {mesh.volume:.1f})\n")
+            f"corrected Part volume {shape.Volume:.1f} "
+            f"(corrected mesh {corrected.volume:.1f}, "
+            f"source mesh {mesh.volume:.1f})\n")
         return feat
     except Exception as exc:                               # noqa: BLE001
         App.Console.PrintWarning(

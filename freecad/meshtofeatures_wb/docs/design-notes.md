@@ -686,10 +686,39 @@ v0.15.6 (lateral pads):
      per-face |n . d| bound was rejected: the bracket's dressable bottom
      fillets legitimately carry a 45-degree-tilted neighbour
      (|n . d| = 0.707) with a perfectly good frame. Blends with no
-     dressable pair are reported in `plan.undressable` and the Report
-     view shows "UNDRASSABLE: ... (detected, undressable: degenerate
-     frame)" — counted, not silently absent. `solidify._edge_cutter`
-     carries the same guard so hand-built plans degrade to a skip.
+      dressable pair are reported in `plan.undressable` and the Report
+      view shows "UNDRASSABLE: ... (detected, undressable: degenerate
+      frame)" — counted, not silently absent. `solidify._edge_cutter`
+      carries the same guard so hand-built plans degrade to a skip.
+
+ 52. **Boolean output is debris-laden; repair it before the BRep
+     conversion** (issue #7). trimesh's manifold engine round-trips
+     every boolean through float32, and the corrected mesh (intersect
+     with the source, union the UNDER patches) carries the residue:
+     ~zero-volume sliver components touching the real solid, and
+     cracked edges where coincident shells share a geometric edge.
+     OCC's `Part.makeShell` stitches the shell (closed=True), but the
+     four-face edges make it fail the BRep check — `Part.Solid` raises,
+     the fallback keeps the raw shell as a Compound, and that compound
+     integrates to a 3%-under volume. Two field lessons: (a) mesh
+     "watertightness" (every indexed edge twice) can hold while the
+     GEOMETRY is non-manifold — a crack keeps the edge indices apart,
+     so the manifold check must be geometric (Manifold's exact
+     constructor), not index-based; (b) `trimesh.Trimesh(v, f)` with
+     the default `process=True` welds float32 cracks and HIDS the
+     non-manifoldness as index-level chaos (verified: the same file
+     reloads clean with `process=False`, broken with the default) —
+     always build boolean results with `process=False`. The repair
+     (`conditioning.repair_solid`) normalizes through the manifold
+     engine, drops components with |volume| < 5e-5 of the largest
+     (plan_corrections' patch floor is 1e-4 of the part, so real
+     material always survives), and fuses the rest into one solid;
+     `apply_corrections` pre-fuses the patches into ONE boolean so the
+     big solid is re-quantized once, not once per patch (bracket:
+     0.9953 → 0.9995 of the source volume). The safety net is the
+     volume gate in `_shape_from_mesh`: Part volume vs trimesh volume,
+     loud warning above 1% drift — a silent wrong-volume Compound is
+     exactly what the gate exists to make audible.
 
 ## Run tests
 
