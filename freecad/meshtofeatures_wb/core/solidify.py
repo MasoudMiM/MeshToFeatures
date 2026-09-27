@@ -481,8 +481,12 @@ def apply_corrections(
     Intersect with the source mesh (removes every OVER component at once,
     without subtracting coplanar-bounded patch solids one by one -- that
     sequential subtraction jitters by percent-level volumes on shared
-    faces) and union back the UNDER patches. The FreeCAD executor uses
-    this exact headless result (OCC's own booleans between a PartDesign
+    faces) and union back the UNDER patches. The patches are pre-fused
+    into ONE solid and fused in a single boolean: fusing them one by one
+    re-quantizes the big solid through float32 on every step, accumulating
+    boolean debris (cracked edges, sliver components) that breaks the
+    downstream BRep conversion (issue #7). The FreeCAD executor uses this
+    exact headless result (OCC's own booleans between a PartDesign
     compound and the faceted mesh degenerate), converted to a terminal
     ``Part::Feature``.
     """
@@ -490,13 +494,18 @@ def apply_corrections(
         out = solid.intersection(mesh)
     except Exception:                                      # noqa: BLE001
         out = solid
-    for c in corrections:
-        if c.kind != "add":
-            continue
+    patches = [c.mesh for c in corrections if c.kind == "add"]
+    if patches:
+        fused = patches[0]
+        for p in patches[1:]:
+            try:
+                fused = fused.union(p)
+            except Exception:                              # noqa: BLE001
+                pass
         try:
-            out = out.union(c.mesh)
+            out = out.union(fused)
         except Exception:                                  # noqa: BLE001
-            continue
+            pass
     return out
 
 

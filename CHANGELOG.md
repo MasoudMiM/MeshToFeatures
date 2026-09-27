@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.17.6 — 2026-09-27
+
+Issue #7: the `Rebuilt (corrected)` Part::Feature installed by the
+terminal deviation-correction pass could be an invalid `Part.Compound`
+with a volume 3% under the mesh -- WORSE than the parametric body.
+Root cause: mesh booleans round-trip through float32 (trimesh's
+manifold engine), which leaves debris on the corrected mesh --
+~zero-volume sliver components touching the real solid, and cracked
+edges where coincident shells share a geometric edge. A shell built
+from such a mesh is topologically invalid for OCC (four-face edges):
+`Part.Solid` fails, the fallback keeps the raw shell as a Compound,
+and that compound integrates to a wrong volume.
+
+### Fixed
+
+- **Boolean-debris repair before the BRep conversion.** New
+  `conditioning.repair_solid`: the corrected mesh is normalized through
+  the manifold engine (exact solid interpretation -- watertight,
+  manifold, cracks welded), micro-debris components with |volume|
+  below 5e-5 of the largest component are dropped (`plan_corrections`
+  never emits patches smaller than 1e-4 of the part volume, so
+  legitimate material always survives), and the surviving components
+  are fused into one solid. `build._shape_from_mesh` runs this pass
+  before the makePolygon/makeShell conversion.
+- **Single-fuse patch application.** `solidify.apply_corrections`
+  pre-fuses the UNDER patches into one solid and fuses them in a
+  single boolean, instead of one float32 round-trip of the big solid
+  per patch (corner bracket: corrected mesh improves from 0.9953 to
+  0.9995 of the source volume, with fewer debris components).
+- **Robust solidification ladder.** When `Part.Solid` fails on a
+  shell, the conversion retries from a tolerance-sewn shell
+  (`sewShape(1e-3)`) before falling back to `fix()`.
+- **Volume gate.** `build._shape_from_mesh` compares the resulting
+  Part volume with the (repaired) trimesh volume and emits a loud
+  `volume gate` console warning on a >1% mismatch, so a silent
+  wrong-volume Compound can no longer be installed unnoticed. The
+  applied-correction console line now reports the corrected Part
+  volume, the corrected mesh volume, and the source mesh volume.
+
+### Tests
+
+- `test_issue7_invalid_compound.py` -- new regression module:
+  - `TestRepairSolid` -- clean solid passes through unchanged; a
+    0.04 mm^3 sliver component on an 8000 mm^3 box is dropped; a
+    real 1e-3-ratio component is kept.
+  - `TestBracketCorrection` -- on the issue-#5 fixture: the
+    single-fuse corrected mesh is watertight and within 1% of the
+    source; after repair it is one watertight manifold solid with no
+    non-manifold edges, still within 1% of the source volume.
+  - `TestShapeFromMesh` -- stubbed FreeCAD/Part: debris faces never
+    reach the shell; the volume gate fires on a 10%-under solid and
+    stays silent within 0.1%; the Solid -> sew -> fix ladder is
+    exercised end to end.
+
 ## 0.17.5 — 2026-09-20
 
 Issue #8: `_fillet_op` could emit FilletOps with degenerate frames. The

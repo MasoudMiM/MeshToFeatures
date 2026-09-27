@@ -12,7 +12,8 @@ from .segmentation import Segment, segment_mesh
 from .pipeline import RecognizedSurface, ReconstructionReport, reconstruct
 from .snapping import SnapConfig, SnapAction, SnapResult, snap_report
 from .emission import PatchSpec, plan_patches
-from .conditioning import ConditioningReport, condition_mesh
+from .conditioning import (ConditioningReport, RepairReport, condition_mesh,
+                           repair_solid)
 from .features import Feature, FeatureReport, detect_features
 from .patterns import Pattern, PatternReport, detect_patterns
 from .history import (BuildPlan, SketchArc, SketchCircle, SketchLine,
@@ -26,7 +27,7 @@ from .solidify import (CorrectionOp, add_corrections, apply_corrections,
                        boolean_engine_available, plan_corrections,
                        plan_to_mesh)
 
-__version__ = "0.17.5"
+__version__ = "0.17.6"
 __all__ = [
     "Plane", "Sphere", "Cylinder", "Cone", "Primitive",
     "FitResult", "fit_plane", "fit_sphere", "fit_cylinder", "fit_cone", "fit_best",
@@ -35,6 +36,7 @@ __all__ = [
     "SnapConfig", "SnapAction", "SnapResult", "snap_report",
     "PatchSpec", "plan_patches",
     "ConditioningReport", "condition_mesh",
+    "RepairReport", "repair_solid",
     "Feature", "FeatureReport", "detect_features",
     "Pattern", "PatternReport", "detect_patterns",
     "BuildPlan", "SketchLine", "SketchArc", "SketchCircle",
