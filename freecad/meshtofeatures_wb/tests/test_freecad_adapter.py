@@ -153,8 +153,9 @@ class TestConeShape:
         spec = [p for p in _patches_for(mesh) if p.kind == "cone"][0]
         shape = emit.patch_to_shape(spec)
         # the segment reaches the apex, so h0 ~ 0 and the reference radius
-        # must be ~0 within fit precision (OCC accepts R = 0)
-        assert shape.surface.Radius == pytest.approx(0.0, abs=1e-6)
+        # must be ~0 within fit precision (~1e-4, varies with the
+        # numpy/LAPACK build; OCC accepts R = 0)
+        assert shape.surface.Radius == pytest.approx(0.0, abs=1e-3)
 
 
 class TestPlaneShape:
