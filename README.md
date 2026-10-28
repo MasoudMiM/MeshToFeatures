@@ -43,6 +43,9 @@ Recognized and rebuilt on the current release:
   `HoleCutType = Counterdrill`.
 - **Conical pockets**: tapered recesses, conical seats, and tapered
   through holes, rebuilt as `PartDesign::SubtractiveCone` primitives.
+- **Tapered bosses** (convex cones): conical studs and draft-angled
+  bosses, truncated or pointed, rebuilt as `PartDesign::AdditiveCone`
+  primitives standing on their base face.
 - **Cross-axis holes** (horizontal holes), both through and blind (a
   blind side hole is rebuilt as a depth-limited pocket).
 - **Vertical bosses** and **lateral pads** — flanges, rails, and gusseted
@@ -61,11 +64,11 @@ Recognized and rebuilt on the current release:
 ## Limitations (please read before filing bugs)
 
 - **Prismatic parts only.** The reconstruction targets parts made of
-  planes and cylinders (plates, brackets, housings, fixtures), plus
-  conical countersinks and conical pockets. Organic / sculpted / scanned
-  shapes will not reconstruct meaningfully. Spheres and tori are fitted
-  by the core but not yet rebuilt as features; CONVEX cones (tapered
-  bosses, draft-angled studs) are not yet a feature either.
+  planes, cylinders, and cones (plates, brackets, housings, fixtures),
+  plus conical countersinks, conical pockets, and tapered bosses.
+  Organic / sculpted / scanned shapes will not reconstruct meaningfully.
+  Spheres and tori are fitted by the core but not yet rebuilt as
+  features.
 - **Freeform transition geometry is carried by the correction pass.**
   Some parts blend a wall into a base through a swept, freeform
   transition band (the Thingiverse corner bracket is the canonical

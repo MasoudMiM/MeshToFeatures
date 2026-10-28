@@ -769,7 +769,7 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
 
     doc.recompute()
 
-    # ---- conical pockets: placed Subtractive/AdditiveCone primitives -------
+    # ---- conical features: placed Subtractive/AdditiveCone primitives ------
     for k, c in enumerate(getattr(plan, "cones", [])):
         try:
             diag = float(body.Shape.BoundBox.DiagonalLength) or float(L)
@@ -780,19 +780,39 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         slope = (c.r_mouth - c.r_far) / max(c.depth, 1e-12)
         face_z = c.surface_z if c.surface_z is not None \
             else (L if c.from_top else 0.0)
-        far_pad = pad if c.through else 0.0
-        r_end = max(c.r_far - slope * far_pad, 0.0)
-        height = c.depth + far_pad + pad
-        if c.from_top:
-            z_lo = float(face_z) - c.depth - far_pad
-            r_lo, r_hi = r_end, c.r_mouth + slope * pad
+        if c.additive:
+            # tapered boss: the base (r_mouth, the wide end) sits on the
+            # face and the feature grows OUT of the material, along the
+            # face's outward normal. SINK the base `pad` INTO the face so
+            # the fuse does not rest on a coincident-face boolean (the cut
+            # buffer doctrine, applied to an add); the sunk leg keeps the
+            # cone's exact slope, so the base lands exactly. The TIP is the
+            # outermost point (in the air, coincident with nothing), so it
+            # is placed EXACTLY -- extending it would overshoot the source.
+            if c.from_top:
+                z_lo = float(face_z) - pad
+                r_lo, r_hi = c.r_mouth + slope * pad, c.r_far
+                height = c.depth + pad
+            else:
+                z_lo = float(face_z) - c.depth
+                r_lo, r_hi = c.r_far, c.r_mouth + slope * pad
+                height = c.depth + pad
+            name = f"TaperedBoss{k}"
         else:
-            z_lo = float(face_z) - pad
-            r_lo, r_hi = c.r_mouth + slope * pad, r_end
+            far_pad = pad if c.through else 0.0
+            r_end = max(c.r_far - slope * far_pad, 0.0)
+            height = c.depth + far_pad + pad
+            if c.from_top:
+                z_lo = float(face_z) - c.depth - far_pad
+                r_lo, r_hi = r_end, c.r_mouth + slope * pad
+            else:
+                z_lo = float(face_z) - pad
+                r_lo, r_hi = c.r_mouth + slope * pad, r_end
+            name = f"ConePocket{k}"
         for pos in c.positions:
-            _add_cone(doc, body, plan, f"ConePocket{k}", pos[0], pos[1],
+            _add_cone(doc, body, plan, name, pos[0], pos[1],
                       z_lo, r_lo, r_hi, height, additive=c.additive,
-                      label=c.label or f"ConePocket{k}", deferred=deferred)
+                      label=c.label or name, deferred=deferred)
     doc.recompute()
 
     # ---- cross-axis holes: through = midplane pocket, blind = Length -------
