@@ -14,9 +14,16 @@ saves a document you can open to inspect visually.
 import os as _os
 import sys as _sys
 if _os.environ.get("_MTF_SMOKE_DONE") == "1":
-    _sys.stdout.write("[smoke] duplicate CLI invocation detected; skipping second run\n")
-    _sys.stdout.flush()
-    _os._exit(0)   # some FreeCAD builds execute CLI scripts twice
+    # freecadcmd processes a .py argument as a MODULE IMPORT (loadModule)
+    # and, only if that import raises, falls back to runFile() -- a second
+    # execution of this file. Reaching the guard therefore means the first
+    # execution raised; exit NON-zero so the failure cannot be swallowed
+    # into a green run. The last [PASS] line above marks where it stopped.
+    _sys.stderr.write("[smoke] second invocation reached: the first run "
+                      "failed -- the last [PASS] line above marks where "
+                      "it stopped\n")
+    _sys.stderr.flush()
+    _os._exit(1)
 _os.environ["_MTF_SMOKE_DONE"] = "1"
 
 import math
@@ -40,7 +47,9 @@ fails = []
 
 def check(name, cond, info=""):
     status = "PASS" if cond else "FAIL"
-    print(f"[{status}] {name}" + (f"  ({info})" if info else ""))
+    # flush=True: freecadcmd drops unflushed Python stdout when the script
+    # ends via sys.exit(), so each check must reach the CI log immediately
+    print(f"[{status}] {name}" + (f"  ({info})" if info else ""), flush=True)
     if not cond:
         fails.append(name)
 
@@ -54,7 +63,8 @@ try:
 except ImportError as exc:
     check("python dependencies importable", False, str(exc))
     print("Install into FreeCAD's Python, e.g.: "
-          f"'{sys.executable}' -m pip install numpy scipy trimesh")
+          f"'{sys.executable}' -m pip install numpy scipy trimesh",
+          flush=True)
     sys.exit(1)
 
 # regression check for the freecad namespace-shadowing bug: FreeCAD's own
@@ -66,10 +76,21 @@ try:
 except ImportError as exc:
     check("freecad namespace merges (module_io importable)", False, str(exc))
 
-from freecad.meshtofeatures_wb.core.pipeline import reconstruct  # noqa: E402
-from freecad.meshtofeatures_wb.core.snapping import snap_report  # noqa: E402
-from freecad.meshtofeatures_wb.core.emission import plan_patches  # noqa: E402
-from freecad.meshtofeatures_wb import emit  # noqa: E402
+try:
+    from freecad.meshtofeatures_wb.core.pipeline import reconstruct  # noqa: E402
+    from freecad.meshtofeatures_wb.core.snapping import snap_report  # noqa: E402
+    from freecad.meshtofeatures_wb.core.emission import plan_patches  # noqa: E402
+    from freecad.meshtofeatures_wb import emit  # noqa: E402
+except Exception:  # noqa: BLE001
+    # freecadcmd's import-failure fallback re-runs this file, where the
+    # guard above would exit non-zero with no root cause; print it here.
+    import traceback
+    traceback.print_exc()
+    print("[FAIL] addon import failed -- the smoke script must run from "
+          "its repository location (it resolves the addon root from its "
+          "own path: four levels above freecad/meshtofeatures_wb/scripts/)",
+          flush=True)
+    sys.exit(1)
 
 # --- build & tessellate a known solid --------------------------------------
 solid = Part.makeCylinder(10.0, 30.0)  # r=10, h=30, axis +Z at origin
@@ -583,7 +604,9 @@ else:
 
 out = os.path.join(tempfile.gettempdir(), "meshtofeatures_smoke.FCStd")
 doc.saveAs(out)
-print(f"\nDocument saved to: {out}  (open it in FreeCAD to inspect)")
+print(f"\nDocument saved to: {out}  (open it in FreeCAD to inspect)",
+      flush=True)
 
-print("\n" + ("ALL CHECKS PASSED" if not fails else f"FAILED: {fails}"))
+print("\n" + ("ALL CHECKS PASSED" if not fails else f"FAILED: {fails}"),
+      flush=True)
 sys.exit(0 if not fails else 1)

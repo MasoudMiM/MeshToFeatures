@@ -158,11 +158,14 @@ modules for the whole session).
 freecad/meshtofeatures_wb/   the FreeCAD workbench: commands, task
                              panel, and the PartDesign executor
   core/                      geometry core (FreeCAD-free: numpy/scipy/
-                             trimesh/shapely) — fitting, segmentation,
-                             snapping, feature detection, build planning
+                              trimesh/shapely) — fitting, segmentation,
+                              snapping, feature detection, build planning
   scripts/                   headless diagnostics (probe + smoke test)
-  tests/                     pytest suite (450+ tests, runs without FreeCAD)
+  tests/                     pytest suite (500+ tests, runs without FreeCAD)
   docs/                      design notes + verification guide
+
+ROADMAP.md                     phased plan after v0.17.7 (executor CI,
+                               feature depth, deviation report, sketching)
 ```
 
 The core is deliberately FreeCAD-free so the entire planning pipeline is
@@ -178,6 +181,12 @@ provides everything).
 pip install numpy scipy trimesh shapely manifold3d mapbox-earcut rtree pytest
 python -m pytest freecad/meshtofeatures_wb/tests/ -q
 ```
+
+CI (`.github/workflows/ci.yml`) runs two jobs on every push and PR: the
+headless suite above on a Python 3.10/3.11/3.12 matrix, and the
+in-FreeCAD executor smoke test (`scripts/freecad_smoke_test.py`, run with
+`freecadcmd` inside a FreeCAD 1.1.x AppImage) — the part of the pipeline
+only a real FreeCAD build can exercise.
 
 ## Contributing & bug reports
 
