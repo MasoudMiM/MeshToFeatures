@@ -28,3 +28,74 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q --durations=20
+
+  # The geometry core is covered by the headless suite above, but the thin
+  # FreeCAD adapter (the PartDesign executor) can only be exercised inside
+  # FreeCAD itself. Issues #3-#8 were all field-discovered executor
+  # regressions the core suite cannot see; this job runs the full
+  # reconstruct -> snap -> plan -> build smoke test in a real FreeCAD build
+  # on every push/PR, so an executor regression fails CI instead of the field.
+  freecad-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The freecadmin target is 1.1.0; pin the newest 1.1.x stable.
+        freecad: ["1.1.4"]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache FreeCAD AppImage
+        id: cache-freecad
+        uses: actions/cache@v4
+        with:
+          # Cache the ~800 MB AppImage only, not the 3 GB extracted tree.
+          path: |
+            ~/freecad/*.AppImage
+            ~/freecad/*.AppImage-SHA256.txt
+          key: freecad-${{ matrix.freecad }}-x86_64-py311
+
+      - name: Download FreeCAD AppImage
+        if: steps.cache-freecad.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/freecad
+          cd ~/freecad
+          gh release download "${{ matrix.freecad }}" \
+            --repo FreeCAD/FreeCAD \
+            --pattern "FreeCAD_${{ matrix.freecad }}-Linux-x86_64-py311.AppImage" \
+            --pattern "FreeCAD_${{ matrix.freecad }}-Linux-x86_64-py311.AppImage-SHA256.txt" \
+            --dir .
+          sha256sum -c "FreeCAD_${{ matrix.freecad }}-Linux-x86_64-py311.AppImage-SHA256.txt"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Extract FreeCAD
+        run: |
+          cd ~/freecad
+          chmod +x "FreeCAD_${{ matrix.freecad }}-Linux-x86_64-py311.AppImage"
+          "./FreeCAD_${{ matrix.freecad }}-Linux-x86_64-py311.AppImage" --appimage-extract
+
+      - name: Install core Python deps into FreeCAD's interpreter
+        run: |
+          # AppRun launches the bundled interpreter with PYTHONHOME and the
+          # SSL certs set. numpy/scipy/shapely ship with the AppImage; the
+          # rest are added. manifold3d enables the deviation-correction case.
+          ~/freecad/squashfs-root/AppRun python -m pip install --no-input \
+            numpy scipy trimesh shapely rtree manifold3d
+
+      - name: Run headless smoke test
+        run: |
+          set -o pipefail
+          ~/freecad/squashfs-root/AppRun freecadcmd \
+            freecad/meshtofeatures_wb/scripts/freecad_smoke_test.py \
+            | tee smoke.log
+          # freecadcmd exits 0 even when the script raises an exception
+          # (it prints "Exception while processing file" and swallows the
+          # failure). The script only prints the ALL CHECKS PASSED /
+          # FAILED sentinel when it ran to the end, so its absence means a
+          # crash mid-run -- fail the job in that case too.
+          if ! grep -qE "ALL CHECKS PASSED|^FAILED: " smoke.log; then
+            echo "::error::smoke script did not run to completion (crashed?)"
+            exit 1
+          fi

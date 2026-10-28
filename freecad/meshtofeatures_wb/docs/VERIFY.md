@@ -1,8 +1,11 @@
 # Verifying the FreeCAD adapter on your machine
 
 The geometry core and the emission planner are fully covered by the pytest
-suite (runs anywhere). The thin FreeCAD layer must be verified inside
-FreeCAD itself -- follow this checklist once per FreeCAD version.
+suite (runs anywhere). CI additionally runs the headless smoke test of
+section 3 inside a FreeCAD 1.1.x AppImage on every push and PR, so the
+AppImage baseline is regression-gated automatically. Follow this
+checklist for YOUR FreeCAD build (another version, a Flatpak/snap/AppImage
+install, or a new feature branch) -- once per FreeCAD version.
 
 ## 1. Install Python dependencies into FreeCAD's interpreter
 

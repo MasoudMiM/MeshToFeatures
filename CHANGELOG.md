@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **FreeCAD executor CI.** A second CI job (`freecad-smoke`) runs the
+  full headless smoke test (`scripts/freecad_smoke_test.py`: 17 parts
+  through reconstruct -> snap -> plan -> feature detection -> PartDesign
+  build, including the manifold3d deviation-correction case) inside a
+  sha256-verified FreeCAD 1.1.x AppImage on every push and PR. The
+  PartDesign executor — the layer behind field regressions #3-#8 — is
+  now regression-gated in CI instead of by the manual VERIFY.md
+  checklist.
+- **ROADMAP.md.** Phased plan after v0.17.7: executor CI (this),
+  feature depth (convex cones, spheres, tori), per-feature deviation
+  report, and dimensioned/constrained sketches, plus deferred items
+  with reasons.
+
+### Changed
+
+- `freecad_smoke_test.py` flushes its `check()` output per check:
+  `freecadcmd` drops unflushed Python stdout when the script ends via
+  `sys.exit()`, which would otherwise hide every `[PASS]`/`[FAIL]` line
+  in the CI log (locally visible, silently absent on redirect).
+- `freecad_smoke_test.py` failure visibility: its duplicate-invocation
+  guard now exits non-zero (it previously exited 0). `freecadcmd` only
+  re-executes a script when the first (import-based) execution raised,
+  so reaching the guard means the first run failed -- which it could
+  formerly be swallowed into a green exit code. Addon-import failures
+  also print their root-cause traceback and a repository-location hint
+  instead of being hidden behind freecadcmd's silent fallback.
+- `pyproject.toml` dependency metadata now matches the workbench's
+  runtime dependency gate: `shapely` and `rtree` are runtime
+  dependencies (they were dev-only extras while the workbench gate and
+  README already required them at runtime); `dev` extras now hold only
+  the test-only packages (`pytest`, `manifold3d`, `mapbox-earcut`).
+
 ## 0.17.7 — 2026-10-26
 
 The last four releases (0.17.3 -- 0.17.6) were all field-discovered
