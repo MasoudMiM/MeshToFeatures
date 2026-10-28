@@ -697,6 +697,10 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
     # would inflate the base extrusion to the top of the boss
     boss_caps = {f.surface_indices[1] for f in feats.features
                  if f.kind == "boss" and len(f.surface_indices) >= 2}
+    # a tapered boss's tip cap (provenance [cone, base, cap]) is the same
+    # story: it is the feature's own end face, not a base extent
+    boss_caps |= {f.surface_indices[2] for f in feats.features
+                  if f.kind == "cone_boss" and len(f.surface_indices) >= 3}
     extent_members = [(i, s) for i, s in members if i not in boss_caps]         or members
     offsets = [float(s.fit.primitive.point @ z) for _, s in extent_members]
     z0, z1 = min(offsets), max(offsets)
@@ -959,6 +963,26 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
                 label=f.description))
             # the floor disk is this cone's own end face: keep the terrace
             # pass off it, or it also emits a straight-walled substitute
+            _cone_faces.update(f.surface_indices[2:])
+        elif f.kind == "cone_boss" and _aligned(f):
+            # tapered boss: r_mouth is the base radius AT the face it
+            # stands on, r_far the tip. The base face -- not the cone
+            # span -- fixes the side, since the boss grows OUT of the
+            # material (the mirror of a cone_pocket, which is cut INTO it)
+            base3d = np.asarray(f.params["base"], dtype=float)
+            bz = float((base3d - origin) @ z)
+            plan.cones.append(ConeOp(
+                r_mouth=float(f.params["base_radius"]),
+                r_far=float(f.params["tip_radius"]),
+                depth=float(f.params["height"]),
+                positions=[_pos2d(f)],
+                from_top=bz > plan.base.length / 2,
+                additive=True,
+                through=False,
+                surface_z=bz,
+                label=f.description))
+            # the tip cap is this cone's own end face: keep the terrace
+            # pass off it (as for cone_pocket's floor disk)
             _cone_faces.update(f.surface_indices[2:])
         elif f.kind == "slot" and _aligned(f) and f.params.get("open"):
             # synthesize the closed notch profile: two lines + far arc +

@@ -360,14 +360,29 @@ def _plan_to_mesh(plan, sections: int) -> trimesh.Trimesh:
                                   sections=sections)
                 solid = solid.difference(fr)
 
-    # conical pockets / studs
+    # conical pockets / tapered bosses
     for c in getattr(plan, "cones", []):
         face_z = (float(c.surface_z) if c.surface_z is not None
                   else (L if c.from_top else 0.0))
         depth = (face_z + 1.0 if c.from_top else L + 1.0 - face_z) \
             if getattr(c, "through", False) else float(c.depth)
+        slope = (c.r_mouth - c.r_far) / max(float(c.depth), 1e-12)
         for (x, y) in c.positions:
-            if c.from_top:
+            if c.additive:
+                # tapered boss: base (r_mouth, the wide end) on the face,
+                # growing OUT of the material. The base leg is sunk 0.5
+                # INTO the face (inside already-solid ground) along the
+                # exact slope; the tip is placed EXACTLY (it is the
+                # outermost point, so extending it would overshoot).
+                if c.from_top:
+                    fr = _frustum(c.r_mouth + slope * 0.5, c.r_far,
+                                  face_z - 0.5, face_z + c.depth,
+                                  center=(x, y), sections=sections)
+                else:
+                    fr = _frustum(c.r_far, c.r_mouth + slope * 0.5,
+                                  face_z - c.depth, face_z + 0.5,
+                                  center=(x, y), sections=sections)
+            elif c.from_top:
                 fr = _frustum(c.r_far, c.r_mouth,
                               face_z - depth, face_z + 0.5,
                               center=(x, y), sections=sections)

@@ -445,6 +445,83 @@ def detect_features(report: ReconstructionReport,
                 f"{'through' if through else f'x {depth:g} deep'}"),
         ))
 
+    # ---- standalone convex cones -> tapered bosses -------------------------
+    # The convex mirror image of the conical pocket above: a full-revolution
+    # cone whose WIDE end (the base) opens at a face and whose NARROW end
+    # (the tip) is either capped by a disk or runs to a point. This is a
+    # tapered boss / draft-angled stud. Claimed only when both ends are
+    # explained (base face + capped-or-pointed tip); anything less is left
+    # unassigned rather than guessed.
+    for ci in cones:
+        if ci in consumed:
+            continue
+        scone = report.surfaces[ci]
+        cone = scone.fit.primitive
+        if not patches[ci].full_u or _is_concave_cone(scone):
+            continue
+        ha = cone.half_angle
+        h_lo, h_hi = patches[ci].v_range          # heights above the apex
+        r_wide = float(h_hi * np.tan(ha))
+        r_narrow = float(h_lo * np.tan(ha))
+        if r_wide <= tol:
+            continue
+        # the base: the WIDE end opening at a face (an interior hole loop
+        # rides the cone near the wide end)
+        base_p = None
+        for p in planes:
+            lps = _plane_hole_loops_on_cone(report.surfaces[p], cone, tol)
+            if not lps:
+                continue
+            h = max(float(np.mean((lp - cone.apex) @ cone.axis))
+                    for lp in lps)
+            if abs(h - h_hi) <= max(tol, 0.1 * (h_hi - h_lo)):
+                base_p = p
+                break
+        if base_p is None:
+            continue
+        # the tip: the NARROW end, capped by a disk or running to a point
+        cap_p = None
+        if r_narrow > tol:
+            for p in planes:
+                if p == base_p or p in consumed:
+                    continue
+                if _outer_loop_is_disk_on_cone(report.surfaces[p], cone, tol):
+                    h = float(np.mean((report.surfaces[p].segment.points
+                                       - cone.apex) @ cone.axis))
+                    if abs(h - h_lo) <= max(tol, 0.1 * (h_hi - h_lo)):
+                        cap_p = p
+                        break
+            if cap_p is None:
+                continue
+        tip_r = 0.0 if r_narrow <= tol else r_narrow
+        height = float(h_hi - h_lo)
+        if height <= tol:
+            continue
+        axis = cone.axis.copy()                   # apex -> wide end (base)
+        base_pt = cone.apex + h_hi * axis
+        anchor = base_pt - float(base_pt @ axis) * axis
+        used = [ci, base_p]
+        if cap_p is not None:
+            used.append(cap_p)
+            consumed.add(cap_p)
+        consumed.add(ci)
+        out.features.append(Feature(
+            kind="cone_boss",
+            surface_indices=used,
+            params={
+                "base_radius": r_wide,
+                "tip_radius": tip_r,
+                "height": height,
+                "position": anchor.tolist(),
+                "axis": axis.tolist(),
+                "base": base_pt.tolist(),
+                "half_angle": float(np.rad2deg(ha)),
+            },
+            description=(
+                f"Tapered boss d{2 * r_wide:g} -> d{2 * tip_r:g} "
+                f"x {height:g}"),
+        ))
+
     # ---- coaxial stacks of concave cylinders -> holes / counterbores ------
     stacks: list[list[int]] = []
     for i in full_concave:

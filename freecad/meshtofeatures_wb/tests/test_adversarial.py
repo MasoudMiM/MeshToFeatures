@@ -163,29 +163,53 @@ def _rebuild_mesh(plan) -> trimesh.Trimesh:
                     _Poly(prof).exterior.coords, sections=SECTIONS)
                 tool.apply_translation([x, y, 0.0])
                 solid = solid.difference(tool)
-    # conical pockets: a revolved frustum, r_mouth at the opening face
-    # tapering to r_far at depth (r_far = 0 runs to a point). A THROUGH cone
-    # is extrapolated a little past the far face along its own slope so the
-    # cut is not coincident with it.
+    # conical features: a revolved frustum. SUBTRACTIVE (pocket): r_mouth at
+    # the opening face tapering to r_far at depth (r_far = 0 runs to a
+    # point); a THROUGH cone is extrapolated a little past the far face
+    # along its own slope so the cut is not coincident with it. ADDITIVE
+    # (tapered boss): the base (r_mouth, the wide end) sits on the face and
+    # the frustum grows OUT of the material; the base leg is sunk `ext` INTO
+    # the material (off the coincident face, inside already-solid ground so
+    # the union adds nothing there) and the tip is placed EXACTLY -- it is
+    # the outermost point, so extending it would overshoot the source.
     for c in getattr(plan, "cones", []):
         from shapely.geometry import Polygon as _CPoly
         sz = c.surface_z
         sz = float(sz) if sz is not None else (L if c.from_top else 0.0)
         slope = (c.r_mouth - c.r_far) / max(c.depth, 1e-12)
         ext = 1.0
-        r_end = max(c.r_far - slope * ext, 0.0) if c.through else c.r_far
-        if c.from_top:
-            z_end = sz - c.depth - (ext if c.through else 0.0)
-            prof = [(0.0, z_end)]
-            if r_end > 1e-9:
-                prof.append((r_end, z_end))
-            prof += [(c.r_mouth, sz), (c.r_mouth, sz + ext), (0.0, sz + ext)]
+        if c.additive:
+            if c.from_top:
+                z_tip = sz + c.depth
+                prof = [(0.0, sz - ext), (c.r_mouth + slope * ext,
+                                          sz - ext)]
+                if c.r_far > 1e-9:
+                    prof.append((c.r_far, z_tip))
+                prof.append((0.0, z_tip))
+            else:
+                z_tip = sz - c.depth
+                prof = [(0.0, z_tip)]
+                if c.r_far > 1e-9:
+                    prof.append((c.r_far, z_tip))
+                prof += [(c.r_mouth, sz), (c.r_mouth + slope * ext,
+                                          sz + ext), (0.0, sz + ext)]
         else:
-            z_end = sz + c.depth + (ext if c.through else 0.0)
-            prof = [(0.0, sz - ext), (c.r_mouth, sz - ext), (c.r_mouth, sz)]
-            if r_end > 1e-9:
-                prof.append((r_end, z_end))
-            prof.append((0.0, z_end))
+            r_end = max(c.r_far - slope * ext, 0.0) if c.through \
+                else c.r_far
+            if c.from_top:
+                z_end = sz - c.depth - (ext if c.through else 0.0)
+                prof = [(0.0, z_end)]
+                if r_end > 1e-9:
+                    prof.append((r_end, z_end))
+                prof += [(c.r_mouth, sz), (c.r_mouth, sz + ext),
+                         (0.0, sz + ext)]
+            else:
+                z_end = sz + c.depth + (ext if c.through else 0.0)
+                prof = [(0.0, sz - ext), (c.r_mouth, sz - ext),
+                        (c.r_mouth, sz)]
+                if r_end > 1e-9:
+                    prof.append((r_end, z_end))
+                prof.append((0.0, z_end))
         tool = trimesh.creation.revolve(_CPoly(prof).exterior.coords,
                                         sections=SECTIONS)
         for (x, y) in c.positions:

@@ -565,6 +565,40 @@ check("cbore body volume within 5% (holes+counterbores actually cut)",
       f"{cbbody.Shape.Volume:.2f} vs {cbp.Volume:.2f}")
 check("cbore body shape is valid", cbbody.Shape.isValid())
 
+# --- tapered boss (AdditiveCone primitive) --------------------------------
+# an r9 -> r5 truncated tapered boss (a conical stud) 6 mm tall on a 10 mm
+# plate: additive material standing on the top face. Rebuilt as a
+# PartDesign::AdditiveCone -- base (r9) on the face, tip (r5) exact. The
+# volume check is what verifies it: a boss built the wrong way round (a
+# straight r5 cylinder, or a subtractive cut into the plate) is visibly off.
+tbo_solid = Part.makeBox(50, 40, 10, App.Vector(-25, -20, 0)) \
+    .fuse(Part.makeCone(9.0, 5.0, 6.0, App.Vector(0, 0, 10.0)))
+tbv, tbf = tbo_solid.tessellate(0.05)
+tbotm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in tbv]),
+                        faces=np.array(tbf), process=True)
+tbrep = snap_report(reconstruct(tbotm)).report
+tbp = plan_patches(tbrep)
+tbfeats = detect_features(tbrep, tbp)
+tbplan = plan_history(tbrep, tbfeats, detect_patterns(tbfeats), tbp)
+tbocones = [c for c in tbplan.cones if c.additive]
+check("tapered boss planned as an additive ConeOp", len(tbocones) == 1,
+      f"{len(tbplan.cones)} cones, {len(tbplan.pockets)} pockets")
+check("tapered boss did not also emit a terrace pocket",
+      tbplan.pockets == [], f"{len(tbplan.pockets)} pockets")
+if tbocones:
+    _c = tbocones[0]
+    check("tapered boss radii recovered",
+          abs(_c.r_mouth - 9.0) < 0.2 and abs(_c.r_far - 5.0) < 0.2,
+          f"r_mouth {_c.r_mouth:.3f}, r_far {_c.r_far:.3f}")
+tbo_body = build.build_body(doc, tbplan, name="RebuiltTaperedBoss")
+check("tapered boss body uses an AdditiveCone primitive",
+      any(o.TypeId == "PartDesign::AdditiveCone" for o in tbo_body.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in tbo_body.Group})))
+check("tapered boss body volume within 2%",
+      abs(tbo_body.Shape.Volume - tbo_solid.Volume) / tbo_solid.Volume < 0.02,
+      f"{tbo_body.Shape.Volume:.2f} vs {tbo_solid.Volume:.2f}")
+check("tapered boss body shape is valid", tbo_body.Shape.isValid())
+
 # --- deviation correction: freeform blends the feature tree cannot capture --
 # issue #5's corner bracket rebuilds +25% over-volume parametrically (its
 # diagonal band and base scoops fit no primitive); the correction pass

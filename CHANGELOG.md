@@ -4,8 +4,20 @@
 
 ### Added
 
+- **Tapered bosses (convex cones) are now a feature.** A full-revolution
+  CONVEX cone — a conical stud or draft-angled boss, truncated or
+  pointed, standing on a face — is detected (`cone_boss`), planned as an
+  additive `ConeOp`, and rebuilt as a `PartDesign::AdditiveCone`
+  primitive (base on the face, tip exact). This is the convex mirror
+  image of the existing conical pocket. The core already *fit* convex
+  cones (coverage 1.0); previously the planner had no additive path, so
+  a tapered boss was left unassigned and the terrace machinery
+  substituted a straight-walled pad of the base radius — the right
+  footprint at the wrong profile, reported as a clean reconstruction.
+  Headless suite: 23 new `test_cone_boss.py` tests (detection, planning,
+  round-trip); smoke test gains a tapered-boss case.
 - **FreeCAD executor CI.** A second CI job (`freecad-smoke`) runs the
-  full headless smoke test (`scripts/freecad_smoke_test.py`: 17 parts
+  full headless smoke test (`scripts/freecad_smoke_test.py`: 18 parts
   through reconstruct -> snap -> plan -> feature detection -> PartDesign
   build, including the manifold3d deviation-correction case) inside a
   sha256-verified FreeCAD 1.1.x AppImage on every push and PR. The
