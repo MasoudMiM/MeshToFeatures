@@ -39,7 +39,7 @@ Status: **done** — merged as PR #11 (2026-10-28); ships in the next
 release.
 
 ## Phase 2 — Feature depth: convex cones, spheres, tori
-(current slice: `feature/additive-cones`)
+(current slice: `feature/spheres`)
 
 The README's core limitation is that the core *fits* spheres, tori, and
 convex cones but the planner/executor do not *rebuild* them. Each item
@@ -52,13 +52,21 @@ Order (smallest documented gap first):
 1. **Convex cones** (tapered bosses, draft-angled studs) as
    `PartDesign::AdditiveCone` — the `SubtractiveCone` path (ConeOp)
    already exists end to end; the convex rule, plan op, and executor
-   branch are the delta. **Done** on `feature/additive-cones`: the
-   `cone_boss` feature, the additive `ConeOp`, the `AdditiveCone`
-   executor branch (base sunk into the face, tip exact), 23 headless
-   tests, and a smoke case.
+    branch are the delta. **Done** (merged as PR #12, 2026-10-28): the
+    `cone_boss` feature, the additive `ConeOp`, the `AdditiveCone`
+    executor branch (base sunk into the face, tip exact), 23 headless
+    tests, and a smoke case.
 2. **Spheres** (spherical bosses and concave seats) — PartDesign has no
-   sphere primitive; the executor builds a placed `Part::Sphere` revolve
-   (circle sketch) fused/cut through the body, or declines loudly.
+   sphere primitive, so the cap is revolve-built as a
+   `PartDesign::Revolution` (additive dome) or `PartDesign::Groove`
+   (subtractive seat) from a circular-arc profile, the apex exact.
+   **Done** (branch `feature/spheres`): the `sphere_boss` / `sphere_seat`
+   features, the `SphereOp` plan op, the revolve executor branch, and the
+   pole-cap tessellation artifact (a boolean-cut socket whose pole the
+   tessellator peels into a separate tiny cone cap is still detected as a
+   smooth cap and rebuilt smooth). Smooth domes, truncated (flat-topped)
+   domes, and smooth sockets; full spheres and flat-bottomed sockets are
+   out of scope. 26 headless tests and dome + socket smoke cases.
 3. **Tori** (round blends on edges the fillet rule cannot claim) — the
    largest of the three; revolve-based, and only where a full-revolution
    torus fit is unambiguous.
@@ -67,8 +75,9 @@ Exit criteria: corpus parts carrying each new feature class with analytic
 ground truth; smoke case per executor path; no unplanned/silent drops of
 newly recognized features.
 
-Status: in progress — item 1 (convex cones) done on
-`feature/additive-cones`; items 2-3 (spheres, tori) not started.
+Status: in progress — item 1 (convex cones) done, merged as PR #12;
+item 2 (spheres) done on branch `feature/spheres` (pending merge);
+item 3 (tori) not started.
 
 ## Phase 3 — Per-feature deviation report
 

@@ -152,6 +152,45 @@ def _frustum(r_lo: float, r_hi: float, z_lo: float, z_hi: float,
     return m
 
 
+def _sphere_cap(radius, rim_radius, top_radius, center_xy, face_z, up,
+                pad, sections: int = 96):
+    """Watertight spherical cap (or zone) about the z axis at ``center_xy``.
+
+    The part of the radius-``radius`` sphere whose rim (radius
+    ``rim_radius``) lies on the plane z = ``face_z`` and which runs toward
+    z > face_z (``up``) or z < face_z. The far end is the pole
+    (``top_radius`` = 0) or a flat truncation at radius ``top_radius``.
+
+    ``pad`` extends the cap PAST the rim (off the face it meets): into the
+    material for an additive union (a sunk leg) or into the air for a
+    subtractive cut (an overhanging lip), keeping the boolean off the
+    coincident face -- the cone boss/pocket doctrine. The far end (the
+    apex, the outermost point) is placed EXACTLY. Returns None when the
+    clip boolean fails.
+    """
+    import math
+    R = float(radius)
+    a_lo = math.sqrt(max(R * R - rim_radius * rim_radius, 0.0))
+    a_hi = math.sqrt(max(R * R - top_radius * top_radius, 0.0))
+    zc = face_z - a_lo if up else face_z + a_lo
+    z_far = face_z + (a_hi - a_lo) if up else face_z - (a_hi - a_lo)
+    if up:
+        z0, z1 = face_z - pad, z_far
+    else:
+        z0, z1 = z_far, face_z + pad
+    sph = trimesh.creation.uv_sphere(radius=R,
+                                     count=[sections, max(sections // 2, 8)])
+    sph.apply_translation([center_xy[0], center_xy[1], zc])
+    box = trimesh.creation.box(
+        extents=[2.0 * R, 2.0 * R, float(z1 - z0)],
+        transform=trimesh.transformations.translation_matrix(
+            [center_xy[0], center_xy[1], 0.5 * (z0 + z1)]))
+    cap = sph.intersection(box)
+    if cap is None or not cap.is_watertight:
+        return None
+    return cap
+
+
 def _frame_matrix(plan) -> np.ndarray:
     t = np.eye(4)
     t[:3, 0] = plan.frame_x
@@ -391,6 +430,23 @@ def _plan_to_mesh(plan, sections: int) -> trimesh.Trimesh:
                               face_z - 0.5, face_z + depth,
                               center=(x, y), sections=sections)
             solid = solid.union(fr) if c.additive else solid.difference(fr)
+
+    # spherical bosses (dome, additive) / seats (socket, subtractive):
+    # a spherical cap revolved about the frame-z axis. The rim sits on the
+    # face (surface_z) and the cap runs OUT of the material (dome) or INTO
+    # it (seat); the rim end is padded off the coincident face, the apex is
+    # exact (see _sphere_cap).
+    for s in getattr(plan, "spheres", []):
+        face_z = (float(s.surface_z) if s.surface_z is not None
+                  else (L if s.from_top else 0.0))
+        up = bool(s.additive == s.from_top)
+        for (x, y) in s.positions:
+            cap = _sphere_cap(s.radius, s.rim_radius, s.top_radius,
+                              (x, y), face_z, up, 0.5, sections)
+            if cap is None:
+                raise ValueError(
+                    f"spherical cap boolean failed for {s.label or 'sphere'}")
+            solid = solid.union(cap) if s.additive else solid.difference(cap)
 
     # into world coordinates (the plan frame is embedded in mesh space)
     solid.apply_transform(_frame_matrix(plan))

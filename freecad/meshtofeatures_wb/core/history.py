@@ -39,8 +39,8 @@ __all__ = ["SketchLine", "SketchArc", "SketchCircle", "loop_to_sketch",
            "hole_op_properties", "FilletOp", "fillet_edge_matches",
            "ChamferOp", "CrossHoleOp", "blend_corner_profile",
            "chamfer_corner_profile",
-           "BasePad", "HoleOp", "PocketOp", "PadOp", "BuildPlan",
-           "plan_history", "MAX_STEP_LEVELS"]
+           "BasePad", "HoleOp", "PocketOp", "PadOp", "ConeOp", "SphereOp",
+           "BuildPlan", "plan_history", "MAX_STEP_LEVELS"]
 
 #: Above this many intermediate step levels a part is treated as too
 #: complex for the single-axis prismatic model and declined (a faceted,
@@ -523,6 +523,33 @@ class ConeOp:
 
 
 @dataclass
+class SphereOp:
+    """A spherical cap revolved about a frame-z axis.
+
+    PartDesign has no sphere primitive, so the executor rebuilds the cap as
+    a ``PartDesign::Revolution`` (a convex cap, additive -- a spherical
+    BOSS/dome) or ``PartDesign::Groove`` (a concave cap, subtractive -- a
+    spherical SEAT/socket) of a circular-arc profile; the headless rebuild
+    unions/differences a spherical cap solid.
+
+    ``radius`` is the sphere radius R, ``rim_radius`` the radius of the
+    opening circle where the cap meets the face, ``top_radius`` the radius
+    at the far end (0 for a smooth apex/bottom), and ``depth`` the axial
+    extent from the face to the apex (R - the rim offset, exactly as for
+    ConeOp). ``surface_z`` is the frame-z of the face the rim lies on.
+    """
+    radius: float
+    rim_radius: float
+    top_radius: float
+    depth: float
+    positions: list                 # [(x, y), ...] in the plan frame
+    from_top: bool = True
+    additive: bool = False
+    surface_z: float | None = None
+    label: str = ""
+
+
+@dataclass
 class BuildPlan:
     frame_origin: np.ndarray
     frame_x: np.ndarray
@@ -536,6 +563,7 @@ class BuildPlan:
     chamfers: list[ChamferOp] = field(default_factory=list)
     cross_holes: list[CrossHoleOp] = field(default_factory=list)
     cones: list[ConeOp] = field(default_factory=list)
+    spheres: list[SphereOp] = field(default_factory=list)
     absorbed_features: int = 0
     unplanned: list[str] = field(default_factory=list)
     #: detected blends with no dressable neighbour pair (degenerate
@@ -701,6 +729,11 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
     # story: it is the feature's own end face, not a base extent
     boss_caps |= {f.surface_indices[2] for f in feats.features
                   if f.kind == "cone_boss" and len(f.surface_indices) >= 3}
+    # a truncated dome's flat top (provenance [sphere, rim, cap]) likewise:
+    # it is the dome's own end face, not a base extent (only present when the
+    # segmentation kept the disk separate from the sphere segment)
+    boss_caps |= {f.surface_indices[2] for f in feats.features
+                  if f.kind == "sphere_boss" and len(f.surface_indices) >= 3}
     extent_members = [(i, s) for i, s in members if i not in boss_caps]         or members
     offsets = [float(s.fit.primitive.point @ z) for _, s in extent_members]
     z0, z1 = min(offsets), max(offsets)
@@ -984,6 +1017,38 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
             # the tip cap is this cone's own end face: keep the terrace
             # pass off it (as for cone_pocket's floor disk)
             _cone_faces.update(f.surface_indices[2:])
+        elif f.kind == "sphere_boss" and _aligned(f):
+            # spherical dome: the rim (base) sits on the face it stands on
+            # and the cap grows OUT of the material (the mirror of a seat,
+            # which is cut INTO it). The base face -- not the cap span --
+            # fixes the side, as for cone_boss.
+            base3d = np.asarray(f.params["base"], dtype=float)
+            bz = float((base3d - origin) @ z)
+            plan.spheres.append(SphereOp(
+                radius=float(f.params["radius"]),
+                rim_radius=float(f.params["rim_radius"]),
+                top_radius=float(f.params["top_radius"]),
+                depth=float(f.params["height"]),
+                positions=[_pos2d(f)],
+                from_top=bz > plan.base.length / 2,
+                additive=True,
+                surface_z=bz,
+                label=f.description))
+        elif f.kind == "sphere_seat" and _aligned(f):
+            # spherical socket: cut INTO the face its rim opens at, running
+            # to a smooth bottom. The rim face fixes the side.
+            base3d = np.asarray(f.params["base"], dtype=float)
+            bz = float((base3d - origin) @ z)
+            plan.spheres.append(SphereOp(
+                radius=float(f.params["radius"]),
+                rim_radius=float(f.params["rim_radius"]),
+                top_radius=0.0,
+                depth=float(f.params["height"]),
+                positions=[_pos2d(f)],
+                from_top=bz > plan.base.length / 2,
+                additive=False,
+                surface_z=bz,
+                label=f.description))
         elif f.kind == "slot" and _aligned(f) and f.params.get("open"):
             # synthesize the closed notch profile: two lines + far arc +
             # a mouth-closing segment pushed OUTWARD so the cut clears the

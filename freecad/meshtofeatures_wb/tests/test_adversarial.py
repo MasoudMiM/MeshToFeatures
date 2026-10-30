@@ -217,6 +217,23 @@ def _rebuild_mesh(plan) -> trimesh.Trimesh:
             t.apply_translation([x, y, 0.0])
             solid = solid.union(t) if c.additive else solid.difference(t)
 
+    # spherical caps: mirror _plan_to_mesh's cap boolean (same helper, so
+    # the proxy and the headless rebuild agree). The rim sits on the face
+    # (surface_z); the cap runs out of the material (dome) or into it
+    # (seat), rim end padded off the coincident face, apex exact.
+    if getattr(plan, "spheres", []):
+        from freecad.meshtofeatures_wb.core.solidify import _sphere_cap
+        for s in plan.spheres:
+            sz = s.surface_z
+            sz = float(sz) if sz is not None else (L if s.from_top else 0.0)
+            up = bool(s.additive == s.from_top)
+            for (x, y) in s.positions:
+                cap = _sphere_cap(s.radius, s.rim_radius, s.top_radius,
+                                  (x, y), sz, up, 0.5, SECTIONS)
+                assert cap is not None, "spherical cap boolean failed"
+                solid = (solid.union(cap) if s.additive
+                         else solid.difference(cap))
+
     # apply fillets (convex, ~perpendicular blends) via corner-tool cuts;
     # FilletOps live in WORLD coordinates, this solid is in the PLAN
     # frame -- transform each op's geometry into the plan frame first

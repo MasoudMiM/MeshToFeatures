@@ -166,6 +166,82 @@ def _add_cone(doc, body, plan, name, x, y, z_lo, r_lo, r_hi, height,
     return op
 
 
+def _add_sphere(doc, body, plan, name, x, y, face_z, R, r_lo, r_hi, depth,
+                pad, additive, from_top, label=""):
+    """Add (Revolution) or cut (Groove) a spherical cap about the frame-z
+    axis at (x, y), rim on the face at ``face_z``.
+
+    PartDesign has no sphere primitive, so the cap is a REVOLVED
+    circular-arc profile: a sketch on a vertical plane through the axis
+    (local x = radial, local y = the axis toward the apex) carries the arc
+    (rim to apex) plus the closing lines, and a ``PartDesign::Revolution``
+    (additive dome) or ``PartDesign::Groove`` (subtractive seat) spins it
+    360 deg about the sketch's vertical axis. The rim end is sunk/extended
+    ``pad`` off the face (the cut/add buffer doctrine -- a coincident-face
+    boolean is the classic OCC flake); the apex (the outermost point) is
+    placed EXACTLY.
+    """
+    import numpy as np
+    if depth <= 0.0 or r_lo <= 0.0:
+        return None
+    a_lo = math.sqrt(max(R * R - r_lo * r_lo, 0.0))
+    a_hi = math.sqrt(max(R * R - r_hi * r_hi, 0.0))
+    # local y runs along the axis toward the apex/bottom: for a from-top
+    # dome and a from-bottom seat that is +frame_z, otherwise -frame_z
+    apex_sign = 1.0 if (additive == from_top) else -1.0
+    o = (plan.frame_origin + x * plan.frame_x + y * plan.frame_y
+         + face_z * plan.frame_z)
+    yd = apex_sign * plan.frame_z
+    zd = -apex_sign * plan.frame_y          # keep the triad right-handed
+    m = App.Matrix(
+        float(plan.frame_x[0]), float(yd[0]), float(zd[0]), float(o[0]),
+        float(plan.frame_x[1]), float(yd[1]), float(zd[1]), float(o[1]),
+        float(plan.frame_x[2]), float(yd[2]), float(zd[2]), float(o[2]),
+        0.0, 0.0, 0.0, 1.0)
+    # profile in (radial, axial): leg at the rim (sunk/extended off the
+    # face), the arc to the apex, the closing line on the axis
+    c = np.array([0.0, -a_lo])
+    a0 = math.atan2(a_lo, r_lo)
+    a1 = math.atan2(a_hi, r_hi) if r_hi > 1e-9 else 0.5 * math.pi
+    prims = [
+        SketchLine(start=np.array([0.0, -pad]), end=np.array([r_lo, -pad])),
+        SketchLine(start=np.array([r_lo, -pad]), end=np.array([r_lo, 0.0])),
+        SketchArc(center=c, radius=float(R),
+                  start=np.array([r_lo, 0.0]),
+                  end=np.array([r_hi, depth]),
+                  sweep=float(a1 - a0)),
+    ]
+    if r_hi > 1e-9:
+        prims.append(SketchLine(start=np.array([r_hi, depth]),
+                                end=np.array([0.0, depth])))
+    prims.append(SketchLine(start=np.array([0.0, depth]),
+                            end=np.array([0.0, -pad])))
+    sk = doc.addObject("Sketcher::SketchObject", name + "Profile")
+    body.addObject(sk)
+    sk.Placement = App.Placement(m)
+    _add_geometry(sk, prims)
+    sk.Visibility = False
+    kind = "PartDesign::Revolution" if additive else "PartDesign::Groove"
+    try:
+        op = doc.addObject(kind, name)
+    except Exception as exc:                    # noqa: BLE001 - old FreeCAD
+        App.Console.PrintError(
+            f"[meshtofeatures] {label or name}: this FreeCAD has no "
+            f"{kind} feature ({exc}); the spherical face is NOT rebuilt\n")
+        doc.removeObject(sk.Name)
+        doc.recompute()
+        return None
+    body.addObject(op)
+    op.Profile = sk
+    op.ReferenceAxis = (sk, ["V_Axis"])
+    op.Angle = 360.0
+    if label:
+        op.Label = label
+    _apply_refine(op)
+    _rollback_if_broken(doc, body, op, sk)
+    return op
+
+
 def _apply_refine(op):
     """Turn on Refine so booleans clean up residual sliver faces/edges
     (documented cause of thin 'sheet' walls rendered at curved cut
@@ -813,6 +889,25 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
             _add_cone(doc, body, plan, name, pos[0], pos[1],
                       z_lo, r_lo, r_hi, height, additive=c.additive,
                       label=c.label or name, deferred=deferred)
+    doc.recompute()
+
+    # ---- spherical features: revolved arc caps (Revolution/Groove) --------
+    for k, s in enumerate(getattr(plan, "spheres", [])):
+        try:
+            diag = float(body.Shape.BoundBox.DiagonalLength) or float(L)
+        except Exception:                       # noqa: BLE001
+            diag = float(L)
+        pad = 1.5e-3 * diag                     # same buffer doctrine as the
+        #  cones: never meet the face the rim opens at on a coincident face
+        face_z = float(s.surface_z) if s.surface_z is not None \
+            else (L if s.from_top else 0.0)
+        name = f"SphericalBoss{k}" if s.additive else f"SphericalSeat{k}"
+        for pos in s.positions:
+            _add_sphere(doc, body, plan, name, float(pos[0]), float(pos[1]),
+                        face_z, float(s.radius), float(s.rim_radius),
+                        float(s.top_radius), float(s.depth), pad,
+                        additive=s.additive, from_top=s.from_top,
+                        label=s.label or name)
     doc.recompute()
 
     # ---- cross-axis holes: through = midplane pocket, blind = Length -------
