@@ -46,6 +46,13 @@ Recognized and rebuilt on the current release:
 - **Tapered bosses** (convex cones): conical studs and draft-angled
   bosses, truncated or pointed, rebuilt as `PartDesign::AdditiveCone`
   primitives standing on their base face.
+- **Spherical bosses (domes)** and **spherical seats (sockets)**: a
+  full-revolution spherical cap standing on a face is rebuilt as a
+  `PartDesign::Revolution` and a concave cap cut into a face as a
+  `PartDesign::Groove` (PartDesign has no sphere primitive, so the cap
+  is a revolved circular-arc profile, the apex placed exactly). Smooth
+  domes, truncated (flat-topped) domes, and smooth sockets are supported;
+  full spheres and flat-bottomed sockets are out of scope.
 - **Cross-axis holes** (horizontal holes), both through and blind (a
   blind side hole is rebuilt as a depth-limited pocket).
 - **Vertical bosses** and **lateral pads** — flanges, rails, and gusseted
@@ -65,10 +72,10 @@ Recognized and rebuilt on the current release:
 
 - **Prismatic parts only.** The reconstruction targets parts made of
   planes, cylinders, and cones (plates, brackets, housings, fixtures),
-  plus conical countersinks, conical pockets, and tapered bosses.
-  Organic / sculpted / scanned shapes will not reconstruct meaningfully.
-  Spheres and tori are fitted by the core but not yet rebuilt as
-  features.
+  plus conical countersinks, conical pockets, tapered bosses, and
+  spherical caps (domes and sockets). Organic / sculpted / scanned
+  shapes will not reconstruct meaningfully. Full spheres and tori are
+  fitted by the core but not yet rebuilt as features.
 - **Freeform transition geometry is carried by the correction pass.**
   Some parts blend a wall into a base through a swept, freeform
   transition band (the Thingiverse corner bracket is the canonical

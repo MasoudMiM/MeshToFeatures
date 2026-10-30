@@ -16,6 +16,21 @@
   footprint at the wrong profile, reported as a clean reconstruction.
   Headless suite: 23 new `test_cone_boss.py` tests (detection, planning,
   round-trip); smoke test gains a tapered-boss case.
+- **Spherical bosses (domes) and seats (sockets).** A full-revolution
+  spherical CAP is now a feature: a convex cap standing on a face is a
+  spherical BOSS (dome), a concave cap cut into a face is a spherical
+  SEAT (socket). PartDesign has no sphere primitive, so the executor
+  revolve-builds the cap — a circular-arc profile sketched on a vertical
+  plane through the axis, spun 360 deg as a `PartDesign::Revolution`
+  (additive dome) or `PartDesign::Groove` (subtractive seat), the apex
+  placed exactly. Smooth domes, truncated (flat-topped) domes, and smooth
+  sockets are supported; full spheres and flat-bottomed sockets are out
+  of scope. The apex is read off the patch's high-elevation end; when the
+  tessellator (FreeCAD's, on a boolean-cut socket) peels the pole off as
+  a separate tiny cone cap, that pole cap is recognized and the cap is
+  still rebuilt smooth. Headless suite: 26 new `test_sphere.py` tests
+  (detection, planning, round-trip); smoke test gains a dome and a socket
+  case.
 - **FreeCAD executor CI.** A second CI job (`freecad-smoke`) runs the
   full headless smoke test (`scripts/freecad_smoke_test.py`: 18 parts
   through reconstruct -> snap -> plan -> feature detection -> PartDesign

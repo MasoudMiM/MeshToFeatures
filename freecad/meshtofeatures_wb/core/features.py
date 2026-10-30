@@ -157,6 +157,38 @@ def _outer_loop_is_disk_on_cone(surf_plane, cone, tol: float) -> bool:
     return outer is not None and bool(np.all(cone.distance(outer) < tol))
 
 
+def _is_concave_sphere(surf) -> bool:
+    """Outward face normals of a spherical SOCKET wall point toward the
+    sphere centre (the material lies outside the cap), of a dome point away
+    from it (the material lies inside)."""
+    from .primitives import Sphere
+    sph: Sphere = surf.fit.primitive
+    k = len(surf.segment.face_indices)
+    centroids = surf.segment.samples[:k]          # samples start with centroids
+    v = centroids - sph.center
+    n = np.linalg.norm(v, axis=1, keepdims=True)
+    n[n == 0.0] = 1.0
+    radial = v / n
+    return float(np.mean(np.einsum("ij,ij->i",
+                                   surf.segment.face_normals, radial))) < 0.0
+
+
+def _plane_hole_loops_on_sphere(surf_plane, sph, tol: float) -> list:
+    """This plane's *interior* hole loops whose points lie on ``sph`` (a
+    spherical cap's rim opening at a face)."""
+    _, holes = _split_loops(surf_plane.segment)
+    return [lp for lp in holes
+            if bool(np.all(sph.distance(lp) < tol))]
+
+
+def _outer_loop_is_disk_on_sphere(surf_plane, sph, tol: float) -> bool:
+    """True when the plane's *outer* boundary rides the sphere: the flat top
+    of a truncated spherical dome (the cap's own end disk), as opposed to a
+    face the cap merely opens through."""
+    outer, _ = _split_loops(surf_plane.segment)
+    return outer is not None and bool(np.all(sph.distance(outer) < tol))
+
+
 # --------------------------------------------------------------------------
 # detection
 # --------------------------------------------------------------------------
@@ -520,6 +552,140 @@ def detect_features(report: ReconstructionReport,
             description=(
                 f"Tapered boss d{2 * r_wide:g} -> d{2 * tip_r:g} "
                 f"x {height:g}"),
+        ))
+
+    # ---- standalone spheres -> spherical bosses / seats -------------------
+    # A full-revolution spherical CAP: a convex cap standing on a face is a
+    # spherical BOSS (dome), a concave cap cut into a face is a spherical
+    # SEAT (socket). The cap's rim (its low-elevation end) opens at a face
+    # whose interior hole loop rides the sphere; the apex (high-elevation
+    # end) is the cap pole (smooth) or a flat truncation (a boss may carry a
+    # flat top). The truncation reads straight off the patch's v_hi -- its
+    # end disk is absorbed into the sphere segment, not a separate surface.
+    # A seat's bottom is smooth by construction (a flat-bottomed socket is a
+    # different feature, left unassigned). Without this rule the sphere is
+    # fitted and then dropped, and the terrace machinery substitutes a
+    # STRAIGHT-WALLED pocket or pad of the rim radius -- the right footprint
+    # at the wrong profile, reported as a clean reconstruction (the cone_boss
+    # gap, for spheres).
+    from .primitives import Sphere, Cone
+    spheres = [i for i, s in enumerate(report.surfaces)
+               if isinstance(s.fit.primitive, Sphere)]
+    for si in spheres:
+        if si in consumed:
+            continue
+        ssph = report.surfaces[si]
+        sph = ssph.fit.primitive
+        if not patches[si].full_u:
+            continue                          # a lune, not a full cap
+        R = float(sph.radius)
+        v_lo, v_hi = patches[si].v_range      # elevations from the cap pole
+        r_lo = float(R * np.cos(v_lo))        # rim radius
+        a_lo = float(R * np.sin(v_lo))        # centre -> rim plane, along pole
+        r_hi = float(R * np.cos(v_hi))        # apex radius (0 at the pole)
+        a_hi = float(R * np.sin(v_hi))
+        if r_lo <= tol or a_hi <= a_lo + tol:
+            continue                          # degenerate (point) cap
+        z_dir = patches[si].z_dir
+        concave = _is_concave_sphere(ssph)
+        # A smooth cap tessellation puts a vertex at the pole, so a smooth
+        # apex reads r_hi = 0 exactly (v_hi = pi/2); a flat truncation reads
+        # a real r_hi. Tolerate 2% of R to absorb coarse-export apex jitter.
+        # But some tessellators (FreeCAD's, on a boolean-cut socket) peel the
+        # pole off as a separate tiny CONE cap, so the sphere patch stops just
+        # short of the pole and reads a small nonzero r_hi. A cone whose apex
+        # (tip) sits at the sphere's geometric pole and opens back toward the
+        # rim closes that apex to a point -- a smooth cap, not a truncation.
+        smooth_tol = max(tol, 0.02 * R)
+        pole = sph.center + R * np.asarray(z_dir)
+        pole_cap_i = None
+        for j in range(len(report.surfaces)):
+            if j == si:
+                continue
+            cj = report.surfaces[j].fit.primitive
+            if not isinstance(cj, Cone):
+                continue
+            if float(np.linalg.norm(
+                    np.asarray(cj.apex) - pole)) > max(tol, 0.05 * R):
+                continue
+            if float(np.dot(np.asarray(cj.axis), z_dir)) >= 0.0:
+                continue                      # opens away from the rim
+            pole_cap_i = j
+            break
+        is_smooth = r_hi <= smooth_tol or pole_cap_i is not None
+        if concave and not is_smooth:
+            continue                          # flat-bottomed socket: out of scope
+
+        def _elev(pts):
+            return float(np.mean(np.arcsin(np.clip(
+                (np.asarray(pts, dtype=float) - sph.center) / R @ z_dir,
+                -1.0, 1.0))))
+
+        # the rim face: a plane whose interior hole loop rides the sphere
+        # near the cap's low-elevation end
+        rim_p = None
+        for p in planes:
+            if p in consumed:
+                continue
+            lps = _plane_hole_loops_on_sphere(report.surfaces[p], sph, tol)
+            if any(abs(_elev(lp) - v_lo) <= max(1e-2, 0.15 * (v_hi - v_lo))
+                   for lp in lps):
+                rim_p = p
+                break
+        if rim_p is None:
+            continue                          # not open at any face
+        # The apex is the patch's high-elevation end: the pole (smooth,
+        # r_hi ~ 0) or a flat truncation at radius r_hi -- read straight off
+        # v_hi. When the segmentation keeps the truncation's end disk as a
+        # SEPARATE plane (its rim dihedral above the adaptive threshold, or
+        # peeled by refinement), record it: it is the feature's own end face
+        # and must be excluded from the base extent, else it inflates the
+        # base extrusion to the top of the dome. When the disk is absorbed
+        # into the sphere segment there is no separate plane to record.
+        cap_p = None
+        if not concave and not is_smooth:
+            for p in planes:
+                if p == rim_p or p in consumed:
+                    continue
+                if not _outer_loop_is_disk_on_sphere(
+                        report.surfaces[p], sph, tol):
+                    continue
+                if abs(_elev(report.surfaces[p].segment.points) - v_hi) <= \
+                        max(1e-2, 0.15 * (v_hi - v_lo)):
+                    cap_p = p
+                    break
+        axis = z_dir.copy()                   # centre -> apex (pole direction)
+        rim_c = sph.center + a_lo * axis
+        a_hi_eff = R if is_smooth else a_hi   # smooth: the apex is the pole
+        height = float(a_hi_eff - a_lo)
+        if height <= tol:
+            continue
+        top_radius = 0.0 if is_smooth else r_hi
+        kind = "sphere_seat" if concave else "sphere_boss"
+        used = [si, rim_p]
+        if cap_p is not None:
+            used.append(cap_p)
+            consumed.add(cap_p)
+        if pole_cap_i is not None:
+            used.append(pole_cap_i)           # the pole cap: part of the cap
+            consumed.add(pole_cap_i)
+        consumed.add(si)
+        out.features.append(Feature(
+            kind=kind,
+            surface_indices=used,
+            params={
+                "radius": R,
+                "rim_radius": r_lo,
+                "top_radius": top_radius,
+                "height": height,
+                "position": rim_c.tolist(),
+                "axis": axis.tolist(),
+                "base": rim_c.tolist(),
+                "base_radius": r_lo,
+            },
+            description=(
+                f"Spherical {'socket' if concave else 'dome'} "
+                f"r={R:g}, rim d{2 * r_lo:g} x {height:g}"),
         ))
 
     # ---- coaxial stacks of concave cylinders -> holes / counterbores ------

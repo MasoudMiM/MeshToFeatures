@@ -599,6 +599,76 @@ check("tapered boss body volume within 2%",
       f"{tbo_body.Shape.Volume:.2f} vs {tbo_solid.Volume:.2f}")
 check("tapered boss body shape is valid", tbo_body.Shape.isValid())
 
+# --- spherical dome (Revolution primitive) --------------------------------
+# an r10 sphere whose rim (r8) sits on the top face of a 10 mm plate: a
+# convex spherical cap (dome) 4 mm tall (R - a_lo, a_lo = sqrt(R^2 - 8^2) = 6).
+# Rebuilt as a PartDesign::Revolution of a circular-arc profile -- PartDesign
+# has no sphere primitive. The volume check is what verifies it: a dome built
+# the wrong way round (a straight r8 pad, or a subtractive cut) is visibly off.
+_dome_sphere = Part.makeSphere(10.0, App.Vector(0, 0, 4.0))   # centre z=4
+_dome_cap = _dome_sphere.common(
+    Part.makeBox(100, 100, 50, App.Vector(-50, -50, 10.0)))   # z >= 10
+dome_solid = Part.makeBox(50, 40, 10, App.Vector(-25, -20, 0)) \
+    .fuse(_dome_cap).removeSplitter()
+dv, df = dome_solid.tessellate(0.05)
+dometm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in dv]),
+                         faces=np.array(df), process=True)
+dorep = snap_report(reconstruct(dometm)).report
+dop = plan_patches(dorep)
+dofeats = detect_features(dorep, dop)
+doplan = plan_history(dorep, dofeats, detect_patterns(dofeats), dop)
+dospheres = [s for s in doplan.spheres if s.additive]
+check("dome planned as an additive SphereOp", len(dospheres) == 1,
+      f"{len(doplan.spheres)} spheres, {len(doplan.pads)} pads")
+check("dome did not also emit a terrace pad",
+      doplan.pads == [], f"{len(doplan.pads)} pads")
+if dospheres:
+    _s = dospheres[0]
+    check("dome radii recovered",
+          abs(_s.radius - 10.0) < 0.2 and abs(_s.rim_radius - 8.0) < 0.2,
+          f"R {_s.radius:.3f}, rim {_s.rim_radius:.3f}")
+dome_body = build.build_body(doc, doplan, name="RebuiltDome")
+check("dome body uses a Revolution feature",
+      any(o.TypeId == "PartDesign::Revolution" for o in dome_body.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in dome_body.Group})))
+check("dome body volume within 2%",
+      abs(dome_body.Shape.Volume - dome_solid.Volume) / dome_solid.Volume < 0.02,
+      f"{dome_body.Shape.Volume:.2f} vs {dome_solid.Volume:.2f}")
+check("dome body shape is valid", dome_body.Shape.isValid())
+
+# --- spherical socket (Groove primitive) ----------------------------------
+# the concave mirror: an r10 sphere whose rim (r8) opens at the top face, cut
+# 4 mm down into the plate to a smooth bottom. Rebuilt as a
+# PartDesign::Groove (subtractive revolution) of a circular-arc profile.
+_seat_sphere = Part.makeSphere(10.0, App.Vector(0, 0, 16.0))   # centre z=16
+_seat_cap = _seat_sphere.common(
+    Part.makeBox(100, 100, 50, App.Vector(-50, -50, -40.0)))   # z <= 10
+seat_solid = Part.makeBox(50, 40, 10, App.Vector(-25, -20, 0)) \
+    .cut(_seat_cap)
+sv, sf = seat_solid.tessellate(0.05)
+seattm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in sv]),
+                         faces=np.array(sf), process=True)
+seatrep = snap_report(reconstruct(seattm)).report
+seatp = plan_patches(seatrep)
+seatfeats = detect_features(seatrep, seatp)
+seatplan = plan_history(seatrep, seatfeats, detect_patterns(seatfeats), seatp)
+seatspheres = [s for s in seatplan.spheres if not s.additive]
+check("socket planned as a subtractive SphereOp", len(seatspheres) == 1,
+      f"{len(seatplan.spheres)} spheres, {len(seatplan.pockets)} pockets")
+if seatspheres:
+    _s = seatspheres[0]
+    check("socket radii recovered",
+          abs(_s.radius - 10.0) < 0.2 and abs(_s.rim_radius - 8.0) < 0.2,
+          f"R {_s.radius:.3f}, rim {_s.rim_radius:.3f}")
+seat_body = build.build_body(doc, seatplan, name="RebuiltSocket")
+check("socket body uses a Groove feature",
+      any(o.TypeId == "PartDesign::Groove" for o in seat_body.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in seat_body.Group})))
+check("socket body volume within 2%",
+      abs(seat_body.Shape.Volume - seat_solid.Volume) / seat_solid.Volume < 0.02,
+      f"{seat_body.Shape.Volume:.2f} vs {seat_solid.Volume:.2f}")
+check("socket body shape is valid", seat_body.Shape.isValid())
+
 # --- deviation correction: freeform blends the feature tree cannot capture --
 # issue #5's corner bracket rebuilds +25% over-volume parametrically (its
 # diagonal band and base scoops fit no primitive); the correction pass
