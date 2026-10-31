@@ -9,9 +9,9 @@ https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html before publishing).
 
 ## Architecture
 
-- `meshtofeatures.primitives` — Plane / Sphere / Cylinder / Cone with
-  point-to-surface distance functions (the single interface that drives
-  fitting, scoring and testing).
+- `meshtofeatures.primitives` — Plane / Sphere / Cylinder / Cone / Torus
+  with point-to-surface distance functions (the single interface that
+  drives fitting, scoring and testing).
 - `meshtofeatures.fitting` — closed-form initializers + nonlinear geometric
   refinement per primitive; `fit_best` does tolerance-gated model
   selection preferring simpler primitives.

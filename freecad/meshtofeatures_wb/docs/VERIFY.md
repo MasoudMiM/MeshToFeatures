@@ -45,8 +45,8 @@ Flatpak installs are sandboxed -- run pip through the flatpak instead
     flatpak run --command=FreeCADCmd org.freecad.FreeCAD freecad/meshtofeatures_wb/scripts/freecad_smoke_test.py
 
 Expected: every line `[PASS]`, ending in `ALL CHECKS PASSED`, and a saved
-`meshtofeatures_smoke.FCStd` you can open to see the reconstructed cylinder +
-caps overlay.
+`meshtofeatures_smoke.FCStd` you can open to see the reconstructed parts and
+their surface-patch overlay.
 
 Optionally, run the full pytest suite with FreeCAD's own interpreter to
 verify the geometry core against the exact numpy/scipy/trimesh versions
@@ -95,9 +95,16 @@ as PartDesign body" on a part with horizontal rounded edges should show
 Fillet features at the end of the tree; report any "no body edge
 matched" warnings with the part.
 
-## 6. Non-goals at v0.3 (do not report as bugs)
+## 6. Known limitations (do not report as bugs)
 
-- Output is bounded *surface patches*, not solids (history inference is a
-  later milestone).
-- Tangent-continuous junctions (e.g. fillet-to-face) may merge into one
-  segment; curvature-aware segmentation is on the roadmap.
+The rebuild emits an editable PartDesign Body (a real solid with history),
+not just surface patches. The remaining limitations are documented in the
+README's "Limitations" section; in short:
+
+- The pipeline targets *prismatic* parts (planes, cylinders, cones, plus
+  conical countersinks/pockets, tapered bosses, spherical caps, and tori);
+  organic / sculpted / 3D-scanned shapes will not reconstruct meaningfully.
+- Full spheres and standalone donuts are fitted by the core but not yet
+  rebuilt as features.
+- Freeform transition bands are carried by the terminal correction pass,
+  not analytic primitives (the parametric body approximates them).

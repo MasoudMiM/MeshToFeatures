@@ -1,6 +1,6 @@
 # Roadmap
 
-Working plan for MeshToFeatures after v0.17.7. Each phase is developed on
+Working plan for MeshToFeatures. Each phase is developed on
 its own branch (see the branch name in each phase's header) and released
 when its exit criteria are met. The order is deliberate: the process
 guarantee first, then feature depth, then trust, then editability.
@@ -39,7 +39,6 @@ Status: **done** — merged as PR #11 (2026-10-28); ships in the next
 release.
 
 ## Phase 2 — Feature depth: convex cones, spheres, tori
-(current slice: `feature/tori`)
 
 The README's core limitation is that the core *fits* spheres, tori, and
 convex cones but the planner/executor do not *rebuild* them. Each item
@@ -84,9 +83,9 @@ Exit criteria: corpus parts carrying each new feature class with analytic
 ground truth; smoke case per executor path; no unplanned/silent drops of
 newly recognized features.
 
-Status: in progress — item 1 (convex cones) done, merged as PR #12;
-item 2 (spheres) done, merged as PR #13; item 3 (tori) done on branch
-`feature/tori` (pending merge).
+Status: **done** — item 1 (convex cones) merged as PR #12; item 2
+(spheres) merged as PR #13; item 3 (tori) merged as PR #14. Shipped in
+v0.18.0 (2026-10-30).
 
 ## Phase 3 — Per-feature deviation report
 
