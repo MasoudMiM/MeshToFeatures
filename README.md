@@ -3,14 +3,15 @@
 **A FreeCAD workbench that reverse-engineers STL meshes of prismatic parts
 into editable PartDesign bodies.**
 
-> **Status: 0.17.x.** The pipeline is well tested on machined-style
+> **Status: 0.18.x.** The pipeline is well tested on machined-style
 > prismatic parts — see the limitations section for what it does not
 > attempt. Bug reports with the offending STL attached are very welcome.
 
 Point it at a triangle mesh of a plate-like machined part and it will:
 
 1. **Segment & recognize** the mesh into analytic surfaces (planes,
-   cylinders) by region-growing + geometric fitting,
+   cylinders, cones, spheres, and tori) by region-growing + geometric
+   fitting,
 2. **Snap** the fitted parameters to inferred design intent — unify
    near-parallel directions to canonical axes, merge coaxial cylinders,
    equalize near-equal radii, round values to grid-friendly numbers —
@@ -83,7 +84,8 @@ Recognized and rebuilt on the current release:
   plus conical countersinks, conical pockets, tapered bosses, spherical
   caps (domes and sockets), and rounded ring bands (tori). Organic /
   sculpted / scanned shapes will not reconstruct meaningfully. Full
-  spheres are fitted by the core but not yet rebuilt as features.
+  spheres and standalone donuts are fitted by the core but not yet
+  rebuilt as features.
 - **Freeform transition geometry is carried by the correction pass.**
   Some parts blend a wall into a base through a swept, freeform
   transition band (the Thingiverse corner bracket is the canonical
@@ -182,8 +184,8 @@ freecad/meshtofeatures_wb/   the FreeCAD workbench: commands, task
   tests/                     pytest suite (500+ tests, runs without FreeCAD)
   docs/                      design notes + verification guide
 
-ROADMAP.md                     phased plan after v0.17.7 (executor CI,
-                               feature depth, deviation report, sketching)
+ROADMAP.md                     phased plan (executor CI, feature depth,
+                               deviation report, sketching)
 ```
 
 The core is deliberately FreeCAD-free so the entire planning pipeline is
