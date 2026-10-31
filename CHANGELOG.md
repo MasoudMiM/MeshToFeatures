@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.18.0 — 2026-10-30
+
+Phase 2 (feature depth) is complete: three new rebuilt feature types —
+tapered bosses (convex cones), spherical domes and sockets, and rounded
+ring bands (tori) — each detected, planned, and rebuilt as editable
+PartDesign history. The PartDesign executor, the layer behind field
+regressions #3–#8, is now gated in CI on every push and PR.
 
 ### Added
 
