@@ -31,6 +31,23 @@
   still rebuilt smooth. Headless suite: 26 new `test_sphere.py` tests
   (detection, planning, round-trip); smoke test gains a dome and a socket
   case.
+- **Rounded ring bands (tori) are now a feature.** A full-revolution ring
+  band — a donut blend the fillet rule cannot claim (fillets are partial
+  revolutions; a ring band is a full one) — is detected (`torus_boss`
+  when it grows out of a face, `torus_recess` when it is cut into one),
+  planned as a `TorusOp`, and rebuilt by revolve: a circular-arc profile
+  sketched on a plane through the major axis, spun 360 deg as a
+  `PartDesign::Revolution` (additive boss) or `PartDesign::Groove`
+  (subtractive seat). The core gained a `Torus` primitive and a
+  `fit_torus` fitter (least-variance axis, (rho, h) circle). The fit
+  carries two impostor gates: a conical one (a cone's normals make a
+  constant angle with its axis, so the normal sweep is narrow) and a
+  partial-patch one (a torus is a full ring; a local curved patch such as
+  a slot's half-cylinder end does not wrap around the major axis), so
+  truncated cones and slot ends are not mis-fit. Standalone donuts and
+  partial-revolution bands are out of scope. Headless suite: 29 new
+  `test_torus.py` tests (detection, planning, round-trip, negatives);
+  smoke test gains a ring-boss and a ring-groove case.
 - **FreeCAD executor CI.** A second CI job (`freecad-smoke`) runs the
   full headless smoke test (`scripts/freecad_smoke_test.py`: 18 parts
   through reconstruct -> snap -> plan -> feature detection -> PartDesign

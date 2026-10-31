@@ -52,7 +52,15 @@ Recognized and rebuilt on the current release:
   `PartDesign::Groove` (PartDesign has no sphere primitive, so the cap
   is a revolved circular-arc profile, the apex placed exactly). Smooth
   domes, truncated (flat-topped) domes, and smooth sockets are supported;
-  full spheres and flat-bottomed sockets are out of scope.
+   full spheres and flat-bottomed sockets are out of scope.
+- **Rounded ring bands (tori)**: a full-revolution ring band standing on
+  a face is a rounded ring BOSS (a donut blend the fillet rule cannot
+  claim), and one cut into a face is a ring SEAT (groove). PartDesign has
+  no torus primitive, so the band is revolve-built — a circular-arc
+  profile on a plane through the major axis, spun 360 deg as a
+  `PartDesign::Revolution` (additive boss) or `PartDesign::Groove`
+  (subtractive seat). Standalone donuts and partial-revolution bands are
+  out of scope.
 - **Cross-axis holes** (horizontal holes), both through and blind (a
   blind side hole is rebuilt as a depth-limited pocket).
 - **Vertical bosses** and **lateral pads** — flanges, rails, and gusseted
@@ -72,10 +80,10 @@ Recognized and rebuilt on the current release:
 
 - **Prismatic parts only.** The reconstruction targets parts made of
   planes, cylinders, and cones (plates, brackets, housings, fixtures),
-  plus conical countersinks, conical pockets, tapered bosses, and
-  spherical caps (domes and sockets). Organic / sculpted / scanned
-  shapes will not reconstruct meaningfully. Full spheres and tori are
-  fitted by the core but not yet rebuilt as features.
+  plus conical countersinks, conical pockets, tapered bosses, spherical
+  caps (domes and sockets), and rounded ring bands (tori). Organic /
+  sculpted / scanned shapes will not reconstruct meaningfully. Full
+  spheres are fitted by the core but not yet rebuilt as features.
 - **Freeform transition geometry is carried by the correction pass.**
   Some parts blend a wall into a base through a swept, freeform
   transition band (the Thingiverse corner bracket is the canonical

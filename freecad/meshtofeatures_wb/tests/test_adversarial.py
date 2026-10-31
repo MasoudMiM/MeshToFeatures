@@ -234,6 +234,23 @@ def _rebuild_mesh(plan) -> trimesh.Trimesh:
                 solid = (solid.union(cap) if s.additive
                          else solid.difference(cap))
 
+    # torus bands: mirror _plan_to_mesh's band boolean (same helper, so the
+    # proxy and the headless rebuild agree). The rim annulus sits on the face
+    # (surface_z); the tube runs out of the material (boss) or into it (seat),
+    # rim end padded off the coincident face, tube top exact.
+    if getattr(plan, "tori", []):
+        from freecad.meshtofeatures_wb.core.solidify import _torus_band
+        for t in plan.tori:
+            sz = t.surface_z
+            sz = float(sz) if sz is not None else (L if t.from_top else 0.0)
+            up = bool(t.additive == t.from_top)
+            for (x, y) in t.positions:
+                band = _torus_band(t.major_radius, t.minor_radius,
+                                   t.a_center, (x, y), sz, up, 0.5, SECTIONS)
+                assert band is not None, "torus band boolean failed"
+                solid = (solid.union(band) if t.additive
+                         else solid.difference(band))
+
     # apply fillets (convex, ~perpendicular blends) via corner-tool cuts;
     # FilletOps live in WORLD coordinates, this solid is in the PLAN
     # frame -- transform each op's geometry into the plan frame first

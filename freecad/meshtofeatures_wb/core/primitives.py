@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-__all__ = ["Plane", "Sphere", "Cylinder", "Cone", "Primitive"]
+__all__ = ["Plane", "Sphere", "Cylinder", "Cone", "Torus", "Primitive"]
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -146,4 +146,44 @@ class Cone:
         return np.where(t >= 0.0, d_line, d_apex)
 
 
-Primitive = Plane | Sphere | Cylinder | Cone
+@dataclass
+class Torus:
+    """Surface of revolution of a circle about ``axis``.
+
+    ``center`` is the centre of the major circle (a point on the axis);
+    ``major_radius`` is the major-circle radius (axis to tube centreline)
+    and ``minor_radius`` the tube radius. ``minor_radius < major_radius``
+    gives a ring; the distance is to the tube surface.
+    """
+
+    center: np.ndarray
+    axis: np.ndarray
+    major_radius: float
+    minor_radius: float
+
+    complexity: int = field(default=3, init=False, repr=False)
+    kind: str = field(default="torus", init=False)
+    #: degrees of freedom of the surface parametrization
+    dof: int = field(default=7, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.center = np.asarray(self.center, dtype=float)
+        self.axis = _unit(self.axis)
+        self.major_radius = float(self.major_radius)
+        self.minor_radius = float(self.minor_radius)
+        if self.major_radius <= 0.0 or self.minor_radius <= 0.0:
+            raise ValueError("torus radii must be positive")
+
+    def distance(self, points: np.ndarray) -> np.ndarray:
+        points = np.atleast_2d(np.asarray(points, dtype=float))
+        v = points - self.center
+        h = v @ self.axis
+        rho = np.linalg.norm(v - np.outer(h, self.axis), axis=1)
+        # distance to the major circle (tube centreline), minus the tube
+        # radius: the (rho, h) cross-section is a circle of radius
+        # minor_radius centred at (major_radius, 0)
+        return np.abs(np.sqrt((rho - self.major_radius) ** 2 + h * h)
+                      - self.minor_radius)
+
+
+Primitive = Plane | Sphere | Cylinder | Cone | Torus

@@ -189,6 +189,15 @@ def _outer_loop_is_disk_on_sphere(surf_plane, sph, tol: float) -> bool:
     return outer is not None and bool(np.all(sph.distance(outer) < tol))
 
 
+def _plane_loops_on_torus(surf_plane, tor, tol: float) -> list:
+    """This plane's boundary loops (inner or outer) whose points lie on
+    ``tor`` -- a ring band's rim opening at a face. A ring band is cut by
+    the face along two circles (inner and outer rim), so a rim face usually
+    carries two such loops; either qualifies the face."""
+    return [lp for lp in surf_plane.segment.boundary_loops
+            if len(lp) >= 3 and bool(np.all(tor.distance(lp) < tol))]
+
+
 # --------------------------------------------------------------------------
 # detection
 # --------------------------------------------------------------------------
@@ -686,6 +695,102 @@ def detect_features(report: ReconstructionReport,
             description=(
                 f"Spherical {'socket' if concave else 'dome'} "
                 f"r={R:g}, rim d{2 * r_lo:g} x {height:g}"),
+        ))
+
+    # ---- standalone tori -> rounded ring bosses / seats --------------------
+    # A full-revolution ring band (a torus) standing on a face is a rounded
+    # ring BOSS (a donut blend the partial-revolution fillet rule cannot
+    # claim), a ring groove cut into a face is a ring SEAT. The band's rim
+    # (where the tube is cut by the face -- an annulus: two concentric circles
+    # in one or two coplanar faces) opens at a face whose boundary loop rides
+    # the torus; the tube top (the outermost point) is the far end. Without
+    # this rule the torus is fitted and then dropped, and the terrace
+    # machinery substitutes a straight-walled pad of the rim radius -- the
+    # right footprint at the wrong profile (the cone_boss/sphere gap, for
+    # tori). The band is claimed only when it is a genuine ring: a real tube
+    # (r < R) actually cut by the face (the tube centre closer than r).
+    from .primitives import Torus
+    toruses = [i for i, s in enumerate(report.surfaces)
+               if isinstance(s.fit.primitive, Torus)]
+    for ti in toruses:
+        if ti in consumed:
+            continue
+        s_t = report.surfaces[ti]
+        tor = s_t.fit.primitive
+        if not patches[ti].full_u:
+            continue                          # a partial ring, not a full band
+        R = float(tor.major_radius)
+        r = float(tor.minor_radius)
+        if r <= tol or r >= R:
+            continue                          # degenerate tube
+        z_dir = patches[ti].z_dir
+
+        # the rim: the face(s) the ring band stands on -- a plane perpendicular
+        # to the band axis whose boundary loop rides the torus. A fused ring
+        # splits the face into an inner disk and an outer region, so there are
+        # usually two coplanar rim faces (inner + outer rim circles).
+        rim_planes: list[int] = []
+        for p in planes:
+            if p in consumed:
+                continue
+            sp = report.surfaces[p]
+            if abs(float(sp.fit.primitive.normal @ z_dir)) < 0.999:
+                continue
+            if _plane_loops_on_torus(sp, tor, tol):
+                rim_planes.append(p)
+        if not rim_planes:
+            continue                          # not open at any face
+
+        # tube-centre height above the rim plane, along the axis; the band
+        # bulges on the tube-centre side of the rim
+        rim_h = float(np.mean([
+            (report.surfaces[p].fit.primitive.point - tor.center) @ z_dir
+            for p in rim_planes]))
+        a_center = float(abs(rim_h))
+        if a_center <= tol or a_center >= r:
+            continue                          # tube does not cross the face
+        s = float(np.sqrt(max(r * r - a_center * a_center, 0.0)))
+        r_outer = R + s
+        r_inner = R - s
+        if r_inner <= tol or r_outer <= tol:
+            continue
+        # the band bulges toward the tube centre; a BOSS grows out of the face
+        # it sits on, a SEAT is cut into it. The rim face's outward normal
+        # (mean mesh face normal) points away from the material.
+        outward = s_t.segment.face_normals.mean(axis=0)
+        on = float(np.linalg.norm(outward))
+        outward = outward / on if on > 1e-9 else z_dir
+        additive = float((s_t.segment.points.mean(axis=0)
+                          - report.surfaces[rim_planes[0]].fit.primitive.point)
+                         @ outward) > 0.0
+        height = a_center + r                # rim -> tube top (outermost)
+        # the band bulges toward the tube centre; the axis runs rim -> band
+        # (the direction the feature grows out of the face)
+        axis = z_dir if rim_h <= 0.0 else -z_dir
+        rim_c = tor.center + rim_h * z_dir   # the rim centre, on the face
+        used = [ti] + rim_planes
+        for p in rim_planes:
+            consumed.add(p)
+        consumed.add(ti)
+        kind = "torus_boss" if additive else "torus_recess"
+        out.features.append(Feature(
+            kind=kind,
+            surface_indices=used,
+            params={
+                "major_radius": R,
+                "minor_radius": r,
+                "a_center": a_center,
+                "rim_inner_radius": r_inner,
+                "rim_outer_radius": r_outer,
+                "height": height,
+                "position": rim_c.tolist(),
+                "axis": axis.tolist(),
+                "base": rim_c.tolist(),
+                "base_radius": r_outer,
+            },
+            description=(
+                f"Rounded ring {'groove' if not additive else 'boss'} "
+                f"R={R:g} r={r:g}, rim d{2 * r_outer:g} x {height:g}"),
         ))
 
     # ---- coaxial stacks of concave cylinders -> holes / counterbores ------
