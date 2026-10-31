@@ -13,7 +13,10 @@ fully testable without FreeCAD. The FreeCAD adapter consumes
               along the axis (the OCC cone parameter is *slant* distance:
               divide by cos(half_angle) when realizing)
 * sphere   -> ``Part.Sphere`` face, u = azimuth in ``u_range``,
-              v = elevation in ``v_range`` (radians, in [-pi/2, pi/2])
+               v = elevation in ``v_range`` (radians, in [-pi/2, pi/2])
+* torus    -> ``Part.Torus`` face, u = toroidal angle in ``u_range``
+               (around the major axis), v = poloidal angle in ``v_range``
+               (around the tube, 0 at the tube top, in [-pi, pi])
 
 Frames are right-handed orthonormal triads ``(x_dir, y_dir, z_dir)`` with
 ``z_dir`` the primitive's natural direction (plane normal, cylinder/cone
@@ -30,7 +33,7 @@ from scipy.spatial import ConvexHull, QhullError
 
 from .fitting import _axis_frame
 from .pipeline import ReconstructionReport
-from .primitives import Plane, Sphere, Cylinder, Cone, Primitive
+from .primitives import Plane, Sphere, Cylinder, Cone, Torus, Primitive
 
 __all__ = ["PatchSpec", "plan_patches"]
 
@@ -42,7 +45,7 @@ _FULL_REVOLUTION_GAP = np.deg2rad(45.0)
 
 @dataclass
 class PatchSpec:
-    kind: str                       # 'plane' | 'cylinder' | 'cone' | 'sphere'
+    kind: str                       # 'plane' | 'cylinder' | 'cone' | 'sphere' | 'torus'
     primitive: Primitive
     origin: np.ndarray              # frame origin (see module docstring)
     x_dir: np.ndarray
@@ -197,6 +200,27 @@ def _sphere_patch(prim: Sphere, pts: np.ndarray) -> PatchSpec:
     )
 
 
+def _torus_patch(prim: Torus, pts: np.ndarray) -> PatchSpec:
+    x, y, z = _frame(prim.axis)
+    rel = pts - prim.center
+    h = rel @ z                                   # axial offset from the tube
+    rho = np.linalg.norm(rel - np.outer(h, z), axis=1)   # radial from axis
+    # poloidal angle around the tube, 0 at the tube TOP (h = +minor_radius):
+    # the (rho - major_radius, h) cross-section is a circle of radius
+    # minor_radius centred at (major_radius, 0)
+    v = np.arctan2(rho - prim.major_radius, h)
+    v_range = (float(v.min()), float(v.max()))
+    u = np.arctan2(rel @ y, rel @ x)              # toroidal angle around axis
+    u_range, full = _angular_range(u)
+    return PatchSpec(
+        kind="torus", primitive=prim, origin=prim.center.copy(),
+        x_dir=x, y_dir=y, z_dir=z,
+        u_range=u_range, full_u=full, v_range=v_range,
+        polygon=None, primitive_points=pts,
+        label=f"Torus R={prim.major_radius:g} r={prim.minor_radius:g}",
+    )
+
+
 def plan_patches(report: ReconstructionReport) -> list[PatchSpec]:
     """One bounded :class:`PatchSpec` per recognized surface, same order."""
     patches: list[PatchSpec] = []
@@ -214,4 +238,6 @@ def plan_patches(report: ReconstructionReport) -> list[PatchSpec]:
             patches.append(_cone_patch(prim, pts))
         elif isinstance(prim, Sphere):
             patches.append(_sphere_patch(prim, pts))
+        elif isinstance(prim, Torus):
+            patches.append(_torus_patch(prim, pts))
     return patches

@@ -669,6 +669,81 @@ check("socket body volume within 2%",
       f"{seat_body.Shape.Volume:.2f} vs {seat_solid.Volume:.2f}")
 check("socket body shape is valid", seat_body.Shape.isValid())
 
+# --- rounded ring boss (Revolution primitive) -----------------------------
+# a full-revolution ring band (major R=10, minor r=3) standing on the top face
+# of a 10 mm plate: the tube centre sits 2 mm above the face and the tube is
+# sunk into the plate. Rebuilt as a PartDesign::Revolution of a circular-arc
+# profile -- PartDesign has no torus primitive. The volume check verifies it: a
+# band built the wrong way round (a straight-walled pad of the rim radius) is
+# visibly off.
+_ring_torus = Part.makeTorus(10.0, 3.0, App.Vector(0, 0, 12.0))   # tube z[9,15]
+_ring_band = _ring_torus.common(
+    Part.makeBox(100, 100, 50, App.Vector(-50, -50, 10.0)))       # z >= 10
+ring_solid = Part.makeBox(50, 40, 10, App.Vector(-25, -20, 0)) \
+    .fuse(_ring_band).removeSplitter()
+rv, rf = ring_solid.tessellate(0.05)
+ringtm = trimesh.Trimesh(vertices=np.array([[v.x, v.y, v.z] for v in rv]),
+                         faces=np.array(rf), process=True)
+ringrep = snap_report(reconstruct(ringtm)).report
+ringp = plan_patches(ringrep)
+ringfeats = detect_features(ringrep, ringp)
+ringplan = plan_history(ringrep, ringfeats, detect_patterns(ringfeats), ringp)
+ringtori = [t for t in ringplan.tori if t.additive]
+check("ring boss planned as an additive TorusOp", len(ringtori) == 1,
+      f"{len(ringplan.tori)} tori, {len(ringplan.pads)} pads")
+check("ring boss did not also emit a terrace pad",
+      ringplan.pads == [], f"{len(ringplan.pads)} pads")
+if ringtori:
+    _t = ringtori[0]
+    check("ring boss radii recovered",
+          abs(_t.major_radius - 10.0) < 0.2 and abs(_t.minor_radius - 3.0) < 0.2,
+          f"R {_t.major_radius:.3f}, r {_t.minor_radius:.3f}")
+ring_body = build.build_body(doc, ringplan, name="RebuiltRingBoss")
+check("ring boss body uses a Revolution feature",
+      any(o.TypeId == "PartDesign::Revolution" for o in ring_body.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in ring_body.Group})))
+check("ring boss body volume within 2%",
+      abs(ring_body.Shape.Volume - ring_solid.Volume) / ring_solid.Volume < 0.02,
+      f"{ring_body.Shape.Volume:.2f} vs {ring_solid.Volume:.2f}")
+check("ring boss body shape is valid", ring_body.Shape.isValid())
+
+# --- ring groove (Groove primitive) ---------------------------------------
+# the concave mirror: a full-revolution ring band cut into the top face -- the
+# tube centre sits 2 mm below the face, leaving an annular groove. Rebuilt as a
+# PartDesign::Groove (subtractive revolution) of a circular-arc profile.
+_seat_ring_torus = Part.makeTorus(10.0, 3.0, App.Vector(0, 0, 8.0))  # tube z[5,11]
+_seat_ring_band = _seat_ring_torus.common(
+    Part.makeBox(100, 100, 50, App.Vector(-50, -50, -40.0)))        # z <= 10
+seat_ring_solid = Part.makeBox(50, 40, 10, App.Vector(-25, -20, 0)) \
+    .cut(_seat_ring_band)
+srv, srf = seat_ring_solid.tessellate(0.05)
+seat_ring_tm = trimesh.Trimesh(
+    vertices=np.array([[v.x, v.y, v.z] for v in srv]),
+    faces=np.array(srf), process=True)
+seat_ring_rep = snap_report(reconstruct(seat_ring_tm)).report
+seat_ring_p = plan_patches(seat_ring_rep)
+seat_ring_feats = detect_features(seat_ring_rep, seat_ring_p)
+seat_ring_plan = plan_history(seat_ring_rep, seat_ring_feats,
+                              detect_patterns(seat_ring_feats), seat_ring_p)
+seat_ring_tori = [t for t in seat_ring_plan.tori if not t.additive]
+check("ring groove planned as a subtractive TorusOp",
+      len(seat_ring_tori) == 1,
+      f"{len(seat_ring_plan.tori)} tori, {len(seat_ring_plan.pockets)} pockets")
+if seat_ring_tori:
+    _t = seat_ring_tori[0]
+    check("ring groove radii recovered",
+          abs(_t.major_radius - 10.0) < 0.2 and abs(_t.minor_radius - 3.0) < 0.2,
+          f"R {_t.major_radius:.3f}, r {_t.minor_radius:.3f}")
+seat_ring_body = build.build_body(doc, seat_ring_plan, name="RebuiltRingSeat")
+check("ring groove body uses a Groove feature",
+      any(o.TypeId == "PartDesign::Groove" for o in seat_ring_body.Group),
+      ", ".join(sorted({o.TypeId.split("::")[-1] for o in seat_ring_body.Group})))
+check("ring groove body volume within 2%",
+      abs(seat_ring_body.Shape.Volume - seat_ring_solid.Volume)
+      / seat_ring_solid.Volume < 0.02,
+      f"{seat_ring_body.Shape.Volume:.2f} vs {seat_ring_solid.Volume:.2f}")
+check("ring groove body shape is valid", seat_ring_body.Shape.isValid())
+
 # --- deviation correction: freeform blends the feature tree cannot capture --
 # issue #5's corner bracket rebuilds +25% over-volume parametrically (its
 # diagonal band and base scoops fit no primitive); the correction pass

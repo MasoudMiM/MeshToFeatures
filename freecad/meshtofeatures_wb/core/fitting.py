@@ -25,7 +25,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
-from .primitives import Plane, Sphere, Cylinder, Cone, Primitive
+from .primitives import Plane, Sphere, Cylinder, Cone, Torus, Primitive
 
 __all__ = [
     "FitResult",
@@ -33,6 +33,7 @@ __all__ = [
     "fit_sphere",
     "fit_cylinder",
     "fit_cone",
+    "fit_torus",
     "fit_best",
 ]
 
@@ -319,6 +320,98 @@ def fit_cone(points: np.ndarray, normals: np.ndarray | None = None,
 
 
 # --------------------------------------------------------------------------
+# torus: least-variance axis (a ring is thin along its major axis), circle
+#       in the (rho, h) cross-section, then refinement
+# --------------------------------------------------------------------------
+
+def fit_torus(points: np.ndarray, normals: np.ndarray | None = None,
+              trim: bool = True) -> FitResult:
+    pts = _as_points(points)
+    if len(pts) < 8:
+        raise ValueError("torus fit needs at least 8 points")
+
+    # ---- initial axis ----
+    # A ring is thin along its major axis: the least-variance direction of
+    # the point cloud. (A cylinder is the opposite -- elongated along its
+    # axis, so it takes the LARGEST variance; that contrast is what lets
+    # model selection tell the two apart.)
+    cent = pts.mean(axis=0)
+    cov = (pts - cent).T @ (pts - cent)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    axis0 = eigvecs[:, 0]                        # smallest eigenvalue
+    if float(eigvals[0]) <= 0.0:
+        raise ValueError("degenerate torus: no axial thinness")
+
+    # ---- initial centre / major / minor radius ----
+    h0 = (pts - cent) @ axis0
+    rho0 = np.linalg.norm(pts - cent - np.outer(h0, axis0), axis=1)
+    R0 = float(np.mean(rho0))
+    r0 = max(float(np.mean(np.sqrt((rho0 - R0) ** 2 + h0 * h0))), 1e-9)
+
+    theta0, phi0 = _spherical(axis0)
+
+    def unpack(x):
+        cx, cy, cz, theta, phi, R, r = x
+        return np.array([cx, cy, cz]), _from_spherical(theta, phi), R, r
+
+    def residuals(x):
+        center, axis, R, r = unpack(x)
+        v = pts - center
+        h = v @ axis
+        rho = np.linalg.norm(v - np.outer(h, axis), axis=1)
+        return np.sqrt((rho - R) ** 2 + h * h) - r
+
+    x0 = [*cent, theta0, phi0, R0, r0]
+    res = least_squares(residuals, x0=x0, method="lm")
+    center, axis, R, r = unpack(res.x)
+    if R <= 0.0 or r <= 0.0:
+        raise ValueError("degenerate torus fit (non-positive radii)")
+    # A conical impostor: every cone surface normal makes the SAME angle with
+    # the axis, so the normal angles never sweep far from that constant (and
+    # a short frustum's (rho, h) cross-section is arc-like, so the point
+    # fit alone cannot tell the two apart). A genuine torus's normals wrap
+    # around the minor circle, sweeping from ~0 deg (tube top) to ~90 deg
+    # (tube equator). Reject when the normals stay inside a narrow band about
+    # the axis -- that band is the cone's half-angle, never the tube's sweep.
+    if normals is not None:
+        nrm = np.atleast_2d(np.asarray(normals, dtype=float))
+        if len(nrm) == len(pts) and len(nrm) >= 6:
+            nrm = nrm / np.linalg.norm(nrm, axis=1, keepdims=True)
+            ax = axis / np.linalg.norm(axis)
+            ang = np.degrees(np.arccos(np.clip(np.abs(nrm @ ax), -1.0, 1.0)))
+            if float(np.percentile(ang, 95)) < 60.0:
+                raise ValueError("torus fit rejected: normals do not sweep "
+                                 "around the tube (conical impostor)")
+    # A torus is a FULL ring: it wraps all the way around its major axis, so
+    # the toroidal angle spans ~360 deg. A local curved patch -- a half-
+    # cylinder (a slot's rounded end), a fillet strip, a partial blend --
+    # covers only a narrow arc of that angle, yet the flexible 7-dof fit
+    # grabs it when the cylinder fit fails on a partial circumference. Reject
+    # when the surface does not wrap around the axis.
+    if len(pts) >= 8:
+        ax = axis / np.linalg.norm(axis)
+        w = pts - center - np.outer((pts - center) @ ax, ax)
+        ref = np.array([1.0, 0.0, 0.0]) if abs(ax[0]) < 0.9 \
+            else np.array([0.0, 1.0, 0.0])
+        u0 = ref - ax * (ref @ ax)
+        u0 /= np.linalg.norm(u0)
+        u = np.arctan2(w @ np.cross(ax, u0), w @ u0)
+        us = np.sort(u)
+        gap = float(np.max(np.diff(np.concatenate([us, [us[0] + 2 * np.pi]]))))
+        if 2 * np.pi - gap < np.deg2rad(300.0):
+            raise ValueError("torus fit rejected: surface does not wrap "
+                             "around the major axis (partial patch)")
+    torus = Torus(center=center, axis=axis, major_radius=R, minor_radius=r)
+    if trim:
+        mask = _trim_mask(torus.distance(pts))
+        if mask is not None and normals is not None \
+                and len(np.atleast_2d(normals)) == len(pts):
+            return fit_torus(pts[mask], np.atleast_2d(normals)[mask],
+                             trim=False)
+    return FitResult.from_primitive(torus, pts)
+
+
+# --------------------------------------------------------------------------
 # model selection
 # --------------------------------------------------------------------------
 
@@ -372,6 +465,7 @@ def fit_best(
         (1, lambda: fit_sphere(fit_pts)),
         (1, lambda: fit_cylinder(fit_pts, fit_nrm)),
         (2, lambda: fit_cone(fit_pts, fit_nrm)),
+        (3, lambda: fit_torus(fit_pts, fit_nrm)),
     )
     prev_complexity = -1
     for complexity, fitter in fitters:

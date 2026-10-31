@@ -40,7 +40,7 @@ __all__ = ["SketchLine", "SketchArc", "SketchCircle", "loop_to_sketch",
            "ChamferOp", "CrossHoleOp", "blend_corner_profile",
            "chamfer_corner_profile",
            "BasePad", "HoleOp", "PocketOp", "PadOp", "ConeOp", "SphereOp",
-           "BuildPlan", "plan_history", "MAX_STEP_LEVELS"]
+            "TorusOp", "BuildPlan", "plan_history", "MAX_STEP_LEVELS"]
 
 #: Above this many intermediate step levels a part is treated as too
 #: complex for the single-axis prismatic model and declined (a faceted,
@@ -550,6 +550,34 @@ class SphereOp:
 
 
 @dataclass
+class TorusOp:
+    """A ring band (torus) revolved about a frame-z axis.
+
+    PartDesign has no torus primitive, so the executor rebuilds the band as a
+    ``PartDesign::Revolution`` (a rounded ring BOSS, additive -- the tube
+    grows out of the face it sits on) or ``PartDesign::Groove`` (a ring SEAT,
+    subtractive -- a groove cut into the face) of a circular-arc profile; the
+    headless rebuild unions/differences a torus-band solid.
+
+    ``major_radius`` is the major-circle radius R (axis to tube centreline),
+    ``minor_radius`` the tube radius r, and ``a_center`` the axial offset of
+    the tube-centre from the rim plane (the face the band opens at). The rim
+    is an annulus: inner radius ``R - sqrt(r^2 - a_center^2)``, outer
+    ``R + sqrt(r^2 - a_center^2)``; the band runs ``a_center + r`` from the
+    face to the tube top. ``surface_z`` is the frame-z of the rim face, as for
+    ConeOp.
+    """
+    major_radius: float
+    minor_radius: float
+    a_center: float
+    positions: list                 # [(x, y), ...] in the plan frame
+    from_top: bool = True
+    additive: bool = False
+    surface_z: float | None = None
+    label: str = ""
+
+
+@dataclass
 class BuildPlan:
     frame_origin: np.ndarray
     frame_x: np.ndarray
@@ -564,6 +592,7 @@ class BuildPlan:
     cross_holes: list[CrossHoleOp] = field(default_factory=list)
     cones: list[ConeOp] = field(default_factory=list)
     spheres: list[SphereOp] = field(default_factory=list)
+    tori: list[TorusOp] = field(default_factory=list)
     absorbed_features: int = 0
     unplanned: list[str] = field(default_factory=list)
     #: detected blends with no dressable neighbour pair (degenerate
@@ -1047,6 +1076,22 @@ def plan_history(report: ReconstructionReport, feats: FeatureReport,
                 positions=[_pos2d(f)],
                 from_top=bz > plan.base.length / 2,
                 additive=False,
+                surface_z=bz,
+                label=f.description))
+        elif f.kind in ("torus_boss", "torus_recess") and _aligned(f):
+            # rounded ring band: the rim (an annulus) sits on the face it
+            # opens at and the tube grows OUT of it (a boss) or is cut INTO it
+            # (a seat). The rim face -- not the band span -- fixes the side,
+            # as for cone_boss/sphere_boss.
+            base3d = np.asarray(f.params["base"], dtype=float)
+            bz = float((base3d - origin) @ z)
+            plan.tori.append(TorusOp(
+                major_radius=float(f.params["major_radius"]),
+                minor_radius=float(f.params["minor_radius"]),
+                a_center=float(f.params["a_center"]),
+                positions=[_pos2d(f)],
+                from_top=bz > plan.base.length / 2,
+                additive=(f.kind == "torus_boss"),
                 surface_z=bz,
                 label=f.description))
         elif f.kind == "slot" and _aligned(f) and f.params.get("open"):

@@ -242,6 +242,85 @@ def _add_sphere(doc, body, plan, name, x, y, face_z, R, r_lo, r_hi, depth,
     return op
 
 
+def _add_torus(doc, body, plan, name, x, y, face_z, R, r, a, pad, additive,
+               from_top, label=""):
+    """Add (Revolution) or cut (Groove) a rounded ring band about the frame-z
+    axis at (x, y), rim annulus on the face at ``face_z``.
+
+    PartDesign has no torus primitive, so the band is a REVOLVED circular-arc
+    profile: a sketch on a vertical plane through the axis (local x = radial,
+    local y = the axis toward the tube top) carries the tube arc (outer rim
+    over the top to inner rim) plus the buried legs and the base line, and a
+    ``PartDesign::Revolution`` (additive boss) or ``PartDesign::Groove``
+    (subtractive seat) spins it 360 deg about the sketch's vertical axis. The
+    rim end is sunk/extended ``pad`` off the face (the cut/add buffer doctrine
+    -- a coincident-face boolean is the classic OCC flake); the tube top (the
+    outermost point) is placed EXACTLY.
+    """
+    import numpy as np
+    if r <= 0.0 or a >= r:
+        return None
+    s = math.sqrt(max(r * r - a * a, 0.0))
+    r_outer = R + s
+    r_inner = R - s
+    # local y runs along the axis toward the tube top (the bulge): for a
+    # from-top boss and a from-bottom seat that is +frame_z, otherwise -frame_z
+    apex_sign = 1.0 if (additive == from_top) else -1.0
+    o = (plan.frame_origin + x * plan.frame_x + y * plan.frame_y
+         + face_z * plan.frame_z)
+    yd = apex_sign * plan.frame_z
+    zd = -apex_sign * plan.frame_y          # keep the triad right-handed
+    m = App.Matrix(
+        float(plan.frame_x[0]), float(yd[0]), float(zd[0]), float(o[0]),
+        float(plan.frame_x[1]), float(yd[1]), float(zd[1]), float(o[1]),
+        float(plan.frame_x[2]), float(yd[2]), float(zd[2]), float(o[2]),
+        0.0, 0.0, 0.0, 1.0)
+    # profile in (radial, axial): the tube arc (outer rim -> top -> inner rim),
+    # the two buried legs (sunk/extended off the face) and the base line. The
+    # tube centre sits at (R, a) and the rim (h = 0) is the annulus
+    # [r_inner, r_outer]; the arc is the part of the tube above the rim.
+    c = np.array([R, a])
+    ang_outer = math.atan2(-a, s)           # outer-rim point, from the centre
+    ang_inner = math.atan2(-a, -s)          # inner-rim point (third quadrant)
+    sweep = (ang_inner + 2.0 * math.pi) - ang_outer   # over the tube top
+    prims = [
+        SketchLine(start=np.array([r_outer, -pad]),
+                   end=np.array([r_outer, 0.0])),
+        SketchArc(center=c, radius=float(r),
+                  start=np.array([r_outer, 0.0]),
+                  end=np.array([r_inner, 0.0]),
+                  sweep=float(sweep)),
+        SketchLine(start=np.array([r_inner, 0.0]),
+                   end=np.array([r_inner, -pad])),
+        SketchLine(start=np.array([r_inner, -pad]),
+                   end=np.array([r_outer, -pad])),
+    ]
+    sk = doc.addObject("Sketcher::SketchObject", name + "Profile")
+    body.addObject(sk)
+    sk.Placement = App.Placement(m)
+    _add_geometry(sk, prims)
+    sk.Visibility = False
+    kind = "PartDesign::Revolution" if additive else "PartDesign::Groove"
+    try:
+        op = doc.addObject(kind, name)
+    except Exception as exc:                    # noqa: BLE001 - old FreeCAD
+        App.Console.PrintError(
+            f"[meshtofeatures] {label or name}: this FreeCAD has no "
+            f"{kind} feature ({exc}); the ring face is NOT rebuilt\n")
+        doc.removeObject(sk.Name)
+        doc.recompute()
+        return None
+    body.addObject(op)
+    op.Profile = sk
+    op.ReferenceAxis = (sk, ["V_Axis"])
+    op.Angle = 360.0
+    if label:
+        op.Label = label
+    _apply_refine(op)
+    _rollback_if_broken(doc, body, op, sk)
+    return op
+
+
 def _apply_refine(op):
     """Turn on Refine so booleans clean up residual sliver faces/edges
     (documented cause of thin 'sheet' walls rendered at curved cut
@@ -908,6 +987,23 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                         float(s.top_radius), float(s.depth), pad,
                         additive=s.additive, from_top=s.from_top,
                         label=s.label or name)
+    # ---- ring bands: revolved arc tori (Revolution/Groove) -----------------
+    for k, t in enumerate(getattr(plan, "tori", [])):
+        try:
+            diag = float(body.Shape.BoundBox.DiagonalLength) or float(L)
+        except Exception:                       # noqa: BLE001
+            diag = float(L)
+        pad = 1.5e-3 * diag                     # same buffer doctrine as the
+        #  spheres: never meet the face the rim opens at on a coincident face
+        face_z = float(t.surface_z) if t.surface_z is not None \
+            else (L if t.from_top else 0.0)
+        name = f"RingBoss{k}" if t.additive else f"RingSeat{k}"
+        for pos in t.positions:
+            _add_torus(doc, body, plan, name, float(pos[0]), float(pos[1]),
+                       face_z, float(t.major_radius), float(t.minor_radius),
+                       float(t.a_center), pad,
+                       additive=t.additive, from_top=t.from_top,
+                       label=t.label or name)
     doc.recompute()
 
     # ---- cross-axis holes: through = midplane pocket, blind = Length -------

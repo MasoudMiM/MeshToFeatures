@@ -191,6 +191,49 @@ def _sphere_cap(radius, rim_radius, top_radius, center_xy, face_z, up,
     return cap
 
 
+def _torus_band(major_radius, minor_radius, a_center, center_xy, face_z, up,
+                pad, sections: int = 96):
+    """Watertight torus band (the tube arc on the ``up`` side of the rim
+    plane) plus buried annular legs, about the z axis at ``center_xy``.
+
+    The tube is the solid of revolution of the minor circle (radius
+    ``minor_radius`` centred at (major_radius, a_center) in the (rho, axial)
+    cross-section); the rim is the annulus where the tube crosses the plane
+    z = ``face_z``. The band is the part of the tube on the ``up`` side of the
+    rim, extended ``pad`` past it (off the coincident face -- the cone
+    boss/pocket doctrine); the tube top (the outermost point) is placed
+    exactly. Returns None when the clip boolean fails.
+    """
+    R = float(major_radius)
+    r = float(minor_radius)
+    a = float(a_center)
+    theta = np.linspace(0.0, 2.0 * np.pi, sections, endpoint=False)
+    circ = np.column_stack([R + r * np.cos(theta), r * np.sin(theta)])
+    circ = np.vstack([circ, circ[:1]])            # closed loop -> watertight
+    tor = trimesh.creation.revolve(circ, sections=sections)
+    tor.process()
+    h_top = a + r                                  # rim -> tube top
+    # the tube centre sits ``a`` from the rim toward the bulge: above the rim
+    # for a boss (up), below it for a seat. The revolve left the centre at
+    # height 0 (the minor circle is centred on the rim plane), so shift to
+    # face_z + sign*a.
+    sign = 1.0 if up else -1.0
+    if up:
+        z0, z1 = face_z - pad, face_z + h_top
+    else:
+        z0, z1 = face_z - h_top, face_z + pad
+    tor.apply_translation([center_xy[0], center_xy[1], face_z + sign * a])
+    span = 2.0 * (R + r)
+    box = trimesh.creation.box(
+        extents=[span, span, float(z1 - z0)],
+        transform=trimesh.transformations.translation_matrix(
+            [center_xy[0], center_xy[1], 0.5 * (z0 + z1)]))
+    band = tor.intersection(box)
+    if band is None or not band.is_watertight:
+        return None
+    return band
+
+
 def _frame_matrix(plan) -> np.ndarray:
     t = np.eye(4)
     t[:3, 0] = plan.frame_x
@@ -447,6 +490,23 @@ def _plan_to_mesh(plan, sections: int) -> trimesh.Trimesh:
                 raise ValueError(
                     f"spherical cap boolean failed for {s.label or 'sphere'}")
             solid = solid.union(cap) if s.additive else solid.difference(cap)
+
+    # rounded ring bands (boss, additive) / seats (groove, subtractive): a
+    # torus band revolved about the frame-z axis. The rim (an annulus) sits on
+    # the face (surface_z) and the tube runs OUT of the material (boss) or
+    # INTO it (seat); the rim end is padded off the coincident face, the tube
+    # top is exact (see _torus_band).
+    for t in getattr(plan, "tori", []):
+        face_z = (float(t.surface_z) if t.surface_z is not None
+                  else (L if t.from_top else 0.0))
+        up = bool(t.additive == t.from_top)
+        for (x, y) in t.positions:
+            band = _torus_band(t.major_radius, t.minor_radius, t.a_center,
+                               (x, y), face_z, up, 0.5, sections)
+            if band is None:
+                raise ValueError(
+                    f"torus band boolean failed for {t.label or 'torus'}")
+            solid = solid.union(band) if t.additive else solid.difference(band)
 
     # into world coordinates (the plan frame is embedded in mesh space)
     solid.apply_transform(_frame_matrix(plan))

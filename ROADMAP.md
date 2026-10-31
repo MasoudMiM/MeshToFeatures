@@ -39,7 +39,7 @@ Status: **done** — merged as PR #11 (2026-10-28); ships in the next
 release.
 
 ## Phase 2 — Feature depth: convex cones, spheres, tori
-(current slice: `feature/spheres`)
+(current slice: `feature/tori`)
 
 The README's core limitation is that the core *fits* spheres, tori, and
 convex cones but the planner/executor do not *rebuild* them. Each item
@@ -67,17 +67,26 @@ Order (smallest documented gap first):
    smooth cap and rebuilt smooth). Smooth domes, truncated (flat-topped)
    domes, and smooth sockets; full spheres and flat-bottomed sockets are
    out of scope. 26 headless tests and dome + socket smoke cases.
-3. **Tori** (round blends on edges the fillet rule cannot claim) — the
+3. **Tori** (rounded ring bands the fillet rule cannot claim) — the
    largest of the three; revolve-based, and only where a full-revolution
-   torus fit is unambiguous.
+   torus fit is unambiguous. **Done** (branch `feature/tori`): the core
+   gained a `Torus` primitive and a `fit_torus` fitter (least-variance
+   axis, (rho, h) circle, with conical-impostor and partial-patch
+   rejection gates so cones and slot half-cylinders are not mis-fit);
+   the `torus_boss` / `torus_recess` features, the `TorusOp` plan op, and
+   the revolve executor branch (a circular-arc profile revolved 360° for a
+   boss, grooved for a seat). Rounded ring bosses (donut blends the
+   fillet rule cannot claim) and ring seats; standalone donuts and
+   partial-revolution bands are out of scope. 29 headless tests and ring
+   boss + ring groove smoke cases.
 
 Exit criteria: corpus parts carrying each new feature class with analytic
 ground truth; smoke case per executor path; no unplanned/silent drops of
 newly recognized features.
 
 Status: in progress — item 1 (convex cones) done, merged as PR #12;
-item 2 (spheres) done on branch `feature/spheres` (pending merge);
-item 3 (tori) not started.
+item 2 (spheres) done, merged as PR #13; item 3 (tori) done on branch
+`feature/tori` (pending merge).
 
 ## Phase 3 — Per-feature deviation report
 
