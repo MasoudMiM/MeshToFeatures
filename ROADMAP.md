@@ -103,11 +103,11 @@ Exit criteria: the report renders for a corpus part and for the corner
 bracket; numbers agree with the probe script's output; no new pipeline
 math — plumbing only.
 
-Status: **in development** — branch `feature/deviation-report`
-(2026-11-08): `core/status.py` (execution ledger + attribution + table
-builder, headless-tested), wired into `build_body` (prints the table to
-the Report view, attaches `plan.feature_report` to the plan),
-smoke-asserted row-per-feature invariant.
+Status: **done** — merged as PR #15 (2026-11-09): `core/status.py`
+(execution ledger + attribution + table builder, headless-tested), wired
+into `build_body` (prints the table to the Report view, attaches
+`plan.feature_report` to the plan), smoke-asserted row-per-feature
+invariant. Ships in the next release.
 
 ## Phase 4 — Dimensioned, constrained sketches
 
