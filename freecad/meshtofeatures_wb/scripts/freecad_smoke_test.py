@@ -190,6 +190,19 @@ check("counterbore body volume within 1%",
       f"{cbody.Shape.Volume:.2f} vs {cb_solid.Volume:.2f}")
 check("counterbore body shape is valid", cbody.Shape.isValid())
 
+# --- per-feature deviation report (phase 3) ----------------------------------
+# build_body must attach one report row per planned feature -- the trust
+# table shown in the Report view; never a silent partial table.
+freq = getattr(cplan, "feature_report", None) or []
+_planned = (1 + len(cplan.pads) + len(cplan.pockets) + len(cplan.holes)
+            + len(cplan.cross_holes) + len(cplan.cones) + len(cplan.spheres)
+            + len(cplan.tori) + len(cplan.fillets) + len(cplan.chamfers))
+check("feature report has one row per planned feature",
+      len(freq) == _planned + len(cplan.unplanned) + len(cplan.undressable),
+      f"{len(freq)} rows for {_planned} planned")
+check("feature report all-clean: every executed feature rebuilt",
+      all(r.status == "rebuilt" for r in freq))
+
 # --- PartDesign Hole feature (countersunk plate) ----------------------------
 # drill (d5) through a 5 mm plate with a 90 deg countersink to d10 at the top
 cs_solid = Part.makeBox(40, 30, 5, App.Vector(-20, -15, 0)) \

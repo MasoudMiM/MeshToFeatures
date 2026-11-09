@@ -57,6 +57,7 @@ def compute(tm, snap: bool, rebuild: bool, progress=None) -> dict:
         except Exception as exc:  # noqa: BLE001 - reported, not fatal
             plan_error = str(exc)
         if plan is not None:
+            plan.src_volume = float(tm.volume)   # feature-report ratio denominator
             try:
                 from .core.solidify import add_corrections
                 add_corrections(plan, tm)

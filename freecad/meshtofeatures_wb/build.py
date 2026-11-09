@@ -20,6 +20,8 @@ from .core.history import (BuildPlan, SketchArc, SketchCircle,
                                chamfer_corner_profile, fillet_edge_matches,
                                hole_op_properties)
 from .core.fitting import _axis_frame
+from .core.status import (ExecutionLedger, feature_report,
+                          format_feature_report)
 
 # The Part volume of a mesh-converted shape must agree with the trimesh
 # volume within this relative tolerance, or the conversion is flagged
@@ -132,7 +134,8 @@ def _point_placement(plan: BuildPlan, x: float, y: float,
 
 
 def _add_cone(doc, body, plan, name, x, y, z_lo, r_lo, r_hi, height,
-              additive=False, label="", deferred=None):
+              additive=False, label="", deferred=None, key=None,
+              ledger=None):
     """Cut (or add) a cone as a placed PartDesign primitive.
 
     ``Radius1`` is the radius at the BASE and ``Radius2`` at the top, so the
@@ -144,6 +147,8 @@ def _add_cone(doc, body, plan, name, x, y, z_lo, r_lo, r_hi, height,
     cone running to a point) but not both.
     """
     if height <= 0.0 or (r_lo <= 0.0 and r_hi <= 0.0):
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "skipped", "degenerate cone")
         return None
     kind = "PartDesign::AdditiveCone" if additive \
         else "PartDesign::SubtractiveCone"
@@ -153,6 +158,9 @@ def _add_cone(doc, body, plan, name, x, y, z_lo, r_lo, r_hi, height,
         App.Console.PrintError(
             f"[meshtofeatures] {label or name}: this FreeCAD has no "
             f"{kind} primitive ({exc}); the conical face is NOT rebuilt\n")
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "skipped",
+                          f"no {kind} primitive")
         return None
     body.addObject(op)
     op.Radius1 = float(r_lo)
@@ -162,12 +170,13 @@ def _add_cone(doc, body, plan, name, x, y, z_lo, r_lo, r_hi, height,
     if label:
         op.Label = label
     _apply_refine(op)
-    _rollback_if_broken(doc, body, op, deferred=deferred)
+    _rollback_if_broken(doc, body, op, deferred=deferred, key=key,
+                        ledger=ledger)
     return op
 
 
 def _add_sphere(doc, body, plan, name, x, y, face_z, R, r_lo, r_hi, depth,
-                pad, additive, from_top, label=""):
+                pad, additive, from_top, label="", key=None, ledger=None):
     """Add (Revolution) or cut (Groove) a spherical cap about the frame-z
     axis at (x, y), rim on the face at ``face_z``.
 
@@ -183,6 +192,8 @@ def _add_sphere(doc, body, plan, name, x, y, face_z, R, r_lo, r_hi, depth,
     """
     import numpy as np
     if depth <= 0.0 or r_lo <= 0.0:
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "skipped", "degenerate cap")
         return None
     a_lo = math.sqrt(max(R * R - r_lo * r_lo, 0.0))
     a_hi = math.sqrt(max(R * R - r_hi * r_hi, 0.0))
@@ -230,6 +241,8 @@ def _add_sphere(doc, body, plan, name, x, y, face_z, R, r_lo, r_hi, depth,
             f"{kind} feature ({exc}); the spherical face is NOT rebuilt\n")
         doc.removeObject(sk.Name)
         doc.recompute()
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "skipped", f"no {kind} feature")
         return None
     body.addObject(op)
     op.Profile = sk
@@ -238,12 +251,12 @@ def _add_sphere(doc, body, plan, name, x, y, face_z, R, r_lo, r_hi, depth,
     if label:
         op.Label = label
     _apply_refine(op)
-    _rollback_if_broken(doc, body, op, sk)
+    _rollback_if_broken(doc, body, op, sk, key=key, ledger=ledger)
     return op
 
 
 def _add_torus(doc, body, plan, name, x, y, face_z, R, r, a, pad, additive,
-               from_top, label=""):
+               from_top, label="", key=None, ledger=None):
     """Add (Revolution) or cut (Groove) a rounded ring band about the frame-z
     axis at (x, y), rim annulus on the face at ``face_z``.
 
@@ -259,6 +272,8 @@ def _add_torus(doc, body, plan, name, x, y, face_z, R, r, a, pad, additive,
     """
     import numpy as np
     if r <= 0.0 or a >= r:
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "skipped", "degenerate band")
         return None
     s = math.sqrt(max(r * r - a * a, 0.0))
     r_outer = R + s
@@ -309,6 +324,8 @@ def _add_torus(doc, body, plan, name, x, y, face_z, R, r, a, pad, additive,
             f"{kind} feature ({exc}); the ring face is NOT rebuilt\n")
         doc.removeObject(sk.Name)
         doc.recompute()
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "skipped", f"no {kind} feature")
         return None
     body.addObject(op)
     op.Profile = sk
@@ -317,7 +334,7 @@ def _add_torus(doc, body, plan, name, x, y, face_z, R, r, a, pad, additive,
     if label:
         op.Label = label
     _apply_refine(op)
-    _rollback_if_broken(doc, body, op, sk)
+    _rollback_if_broken(doc, body, op, sk, key=key, ledger=ledger)
     return op
 
 
@@ -332,12 +349,16 @@ def _apply_refine(op):
         pass
 
 
-def _rollback_if_broken(doc, body, op, sketch=None, deferred=None) -> bool:
+def _rollback_if_broken(doc, body, op, sketch=None, deferred=None, key=None,
+                        ledger=None) -> bool:
     """Recompute; if ``op`` failed, try to RECOVER it before giving up, and
-    if it must be removed, say so LOUDLY. (Field lesson: the 8th counterbore
-    shoulder terrace failed to compute on featuretype and was silently
-    deleted, leaving a standing wall at that one bore for ten versions --
-    a silent drop hides the root cause.) Recovery ladder:
+    if it must be removed, say so LOUDLY. When ``key``=(kind, index) and
+    ``ledger`` are given, the same outcome is recorded on
+    :class:`~.core.status.ExecutionLedger` for the per-feature report.
+    (Field lesson: the 8th counterbore shoulder terrace failed to compute on
+    featuretype and was silently deleted, leaving a standing wall at that one
+    bore for ten versions -- a silent drop hides the root cause.) Recovery
+    ladder:
       1. Refine off (Refine occasionally trips OCC on tricky shapes)
       2. jitter Length by a relative 1e-4 (sub-mesh-tolerance; dodges
          boolean tangency/coincidence flakes, the classic OCC failure)
@@ -387,7 +408,9 @@ def _rollback_if_broken(doc, body, op, sketch=None, deferred=None) -> bool:
         print(msg.strip())
         doc.removeObject(op.Name)
         doc.recompute()
-        deferred.append((sketch, spec))
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "deferred")
+        deferred.append((sketch, spec, key))
         return True
 
     # rung 2 (no-deferral contexts only): relative Length jitter
@@ -425,6 +448,9 @@ def _rollback_if_broken(doc, body, op, sketch=None, deferred=None) -> bool:
                f"was RECOVERED by an epsilon retry\n")
         App.Console.PrintMessage(msg)
         print(msg.strip())
+        if key is not None and ledger is not None:
+            ledger.record(key[0], key[1], "recovered",
+                          "in-place boolean failure recovered by retry")
         return False
 
     msg = (f"[meshtofeatures] feature '{op.Label}' FAILED to compute "
@@ -433,6 +459,8 @@ def _rollback_if_broken(doc, body, op, sketch=None, deferred=None) -> bool:
     App.Console.PrintError(msg)
     App.Console.PrintMessage(msg)         # message level: never filtered
     print(msg.strip())
+    if key is not None and ledger is not None:
+        ledger.record(key[0], key[1], "skipped", "failed to compute")
     doc.removeObject(op.Name)
     if sketch is not None:
         doc.removeObject(sketch.Name)
@@ -440,7 +468,7 @@ def _rollback_if_broken(doc, body, op, sketch=None, deferred=None) -> bool:
     return True
 
 
-def _lateral_pad(doc, body, plan, pad, k):
+def _lateral_pad(doc, body, plan, pad, k, key=None, ledger=None):
     """A lateral pad (design note 36): material protruding sideways off a
     wall. The sketch sits on a plane perpendicular to the pad axis --
     placement columns (u, v, axis) with the profile in (u, v) -- and the
@@ -467,7 +495,7 @@ def _lateral_pad(doc, body, plan, pad, k):
     op.Length = float(pad.length)
     op.Label = pad.label or op.Name
     _apply_refine(op)
-    _rollback_if_broken(doc, body, op, s)
+    _rollback_if_broken(doc, body, op, s, key=key, ledger=ledger)
 
 
 def _geometric_blend(doc, body, blend, k, kind):
@@ -684,9 +712,17 @@ def _apply_corrections(doc, body, plan: BuildPlan, name: str):
 
 
 def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
-    """Create a PartDesign Body implementing ``plan``; returns the body."""
+    """Create a PartDesign Body implementing ``plan``; returns the body.
+
+    While building, records each planned op's outcome on an
+    :class:`~.core.status.ExecutionLedger` and, at the end, prints the
+    per-feature deviation report (phase 3) to the Report view; the rows are
+    also attached to ``plan.feature_report`` for programmatic checks.
+    """
     body = doc.addObject("PartDesign::Body", name)
+    report_name = name      # loops below reuse ``name``; keep the body name
     deferred = []            # failed CUTS to retry at the end of the chain
+    ledger = ExecutionLedger()
 
     base_entries = list(plan.base.profile)
     for hp in getattr(plan.base, "hole_profiles", []):
@@ -714,7 +750,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
             if p.label == "Gusset web":
                 gusset_pads.append((k, p))
                 continue
-            _lateral_pad(doc, body, plan, p, k)
+            _lateral_pad(doc, body, plan, p, k, key=("pad", k),
+                         ledger=ledger)
             continue
         top = getattr(p, "from_top", True)
         s = _circle_sketch(doc, body, plan, L if top else 0.0, p.profile,
@@ -726,7 +763,7 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         op.Label = p.label or op.Name
         _apply_refine(op)
         s.Visibility = False
-        _rollback_if_broken(doc, body, op, s)
+        _rollback_if_broken(doc, body, op, s, key=("pad", k), ledger=ledger)
 
     for k, p in enumerate(plan.pockets):
         top = getattr(p, "from_top", True)
@@ -753,11 +790,12 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         op.Label = p.label or op.Name
         _apply_refine(op)
         s.Visibility = False
-        _rollback_if_broken(doc, body, op, s, deferred=deferred)
+        _rollback_if_broken(doc, body, op, s, deferred=deferred,
+                            key=("pocket", k), ledger=ledger)
 
     # gusset webs, now that the recess pockets exist to receive them
     for k, p in gusset_pads:
-        _lateral_pad(doc, body, plan, p, k)
+        _lateral_pad(doc, body, plan, p, k, key=("pad", k), ledger=ledger)
 
     for k, h in enumerate(plan.holes):
         import numpy as np
@@ -815,9 +853,9 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
             op.Profile = s
             props = hole_op_properties(h)
             props["Reversed"] = False   # side is encoded in the placement
-            for name, value in props.items():
-                if hasattr(op, name):
-                    setattr(op, name, value)
+            for prop, value in props.items():
+                if hasattr(op, prop):
+                    setattr(op, prop, value)
             op.Label = h.label or op.Name
             _apply_refine(op)
             doc.recompute()
@@ -837,6 +875,9 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
             # bottom-face countersink.)
             if op is not None:
                 doc.removeObject(op.Name)
+            if ledger is not None:
+                ledger.record("hole", k, "fallback",
+                              "PartDesign::Hole unusable; pocket cut")
             op = doc.addObject("PartDesign::Pocket", f"Hole{k}")
             body.addObject(op)
             op.Profile = s
@@ -856,7 +897,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                 op.Length = float(h.depth) + cb_extra
             op.Label = h.label or op.Name
             _apply_refine(op)
-            _rollback_if_broken(doc, body, op, s, deferred=deferred)
+            _rollback_if_broken(doc, body, op, s, deferred=deferred,
+                                key=("hole", k), ledger=ledger)
             if h.counterbore_diameter:
                 # For a BELOW-TOP bore, grow the counterbore circle by the
                 # SAME 1.5*tol buffer the terraces get. The reconstructed
@@ -888,7 +930,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                 op2.Length = float(h.counterbore_depth) + cb_extra
                 _apply_refine(op2)
                 s2.Visibility = False
-                _rollback_if_broken(doc, body, op2, s2, deferred=deferred)
+                _rollback_if_broken(doc, body, op2, s2, deferred=deferred,
+                                    key=("counterbore", k), ledger=ledger)
             if h.countersink_diameter:
                 # The pocket path cuts cylinders only, so the CONICAL entry
                 # of a countersunk or counterdrilled hole used to be dropped
@@ -919,7 +962,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                 for pos in h.positions:
                     _add_cone(doc, body, plan, f"Countersink{k}",
                               pos[0], pos[1], z_lo, r_lo, r_hi, run,
-                              label=f"Countersink{k}", deferred=deferred)
+                              label=f"Countersink{k}", deferred=deferred,
+                              key=("countersink", k), ledger=ledger)
             doc.recompute()
 
     doc.recompute()
@@ -967,7 +1011,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
         for pos in c.positions:
             _add_cone(doc, body, plan, name, pos[0], pos[1],
                       z_lo, r_lo, r_hi, height, additive=c.additive,
-                      label=c.label or name, deferred=deferred)
+                      label=c.label or name, deferred=deferred,
+                      key=("cone", k), ledger=ledger)
     doc.recompute()
 
     # ---- spherical features: revolved arc caps (Revolution/Groove) --------
@@ -986,7 +1031,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                         face_z, float(s.radius), float(s.rim_radius),
                         float(s.top_radius), float(s.depth), pad,
                         additive=s.additive, from_top=s.from_top,
-                        label=s.label or name)
+                        label=s.label or name, key=("sphere", k),
+                        ledger=ledger)
     # ---- ring bands: revolved arc tori (Revolution/Groove) -----------------
     for k, t in enumerate(getattr(plan, "tori", [])):
         try:
@@ -1003,7 +1049,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                        face_z, float(t.major_radius), float(t.minor_radius),
                        float(t.a_center), pad,
                        additive=t.additive, from_top=t.from_top,
-                       label=t.label or name)
+                       label=t.label or name, key=("torus", k),
+                       ledger=ledger)
     doc.recompute()
 
     # ---- cross-axis holes: through = midplane pocket, blind = Length -------
@@ -1082,7 +1129,8 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                     op.Midplane = True
         op.Label = ch.label or op.Name
         _apply_refine(op)
-        _rollback_if_broken(doc, body, op, s, deferred=deferred)
+        _rollback_if_broken(doc, body, op, s, deferred=deferred,
+                            key=("cross-hole", k), ledger=ledger)
 
     # ---- horizontal fillets: geometric edge matching on the sharp body ----
     # No topological names are trusted: for each FilletOp, straight edges
@@ -1106,7 +1154,12 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                     for fo in getattr(plan, "fillets", [])]
         dressups += [("PartDesign::Chamfer", "Size", co.size, co)
                      for co in getattr(plan, "chamfers", [])]
+        n_fillets = len(getattr(plan, "fillets", []))
         for k, (type_id, prop, value, fo) in enumerate(dressups):
+            # the row key: a dressup's position within ITS OWN op list, so
+            # Dressup k maps back to plan.fillets / plan.chamfers correctly
+            blk = "fillet" if k < n_fillets else "chamfer"
+            bi = k if k < n_fillets else k - n_fillets
             names = []
             for idx, edge in enumerate(prev.Shape.Edges):
                 try:
@@ -1127,12 +1180,16 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                     # at the mesh-fit position instead of dropping it.
                     fb = _geometric_blend(doc, body, fo, k, "fillet")
                     if fb is not None:
+                        ledger.record(blk, bi, "geometric",
+                                      "no parametric edge; dressed at the "
+                                      "mesh-fit edge")
                         prev = fb
                         continue
                 App.Console.PrintWarning(
                     f"[meshtofeatures] no body edge matched "
                     f"{type_id.rsplit('::', 1)[-1].lower()} "
                     f"'{fo.label}'; skipped\n")
+                ledger.record(blk, bi, "skipped", "no body edge matched")
                 continue
             op = doc.addObject(type_id, f"Dressup{k}")
             body.addObject(op)
@@ -1146,6 +1203,7 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                 App.Console.PrintWarning(
                     f"[meshtofeatures] fillet '{fo.label}' failed to compute; "
                     f"removing\n")
+                ledger.record(blk, bi, "skipped", "dress-up failed to compute")
                 doc.removeObject(op.Name)
                 doc.recompute()
             else:
@@ -1157,7 +1215,7 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
     # is identical to the planned one. The re-add mirrors the field-verified
     # probe retry EXACTLY: pristine sketch, Profile + Length only (Type set
     # only when non-default), no Refine, label applied only after validation.
-    for sketch, spec in deferred:
+    for sketch, spec, key in deferred:
         msg = (f"[meshtofeatures] retrying deferred cut "
                f"'{spec.get('Label')}' at the end of the chain\n")
         App.Console.PrintMessage(msg)
@@ -1193,9 +1251,26 @@ def build_body(doc, plan: BuildPlan, name: str = "Rebuilt"):
                    f"chain\n")
             App.Console.PrintMessage(msg)
             print(msg.strip())
+            if key is not None:
+                ledger.record(key[0], key[1], "deferred",
+                              "rebuilt at the end of the chain")
 
     # ---- deviation correction: mesh-accurate terminal shape ---------------
-    _apply_corrections(doc, body, plan, name)
+    corr_feat = _apply_corrections(doc, body, plan, name)
 
     doc.recompute()
+    try:
+        rows, unattr = feature_report(plan, ledger)
+        plan.feature_report = rows
+        for ln in format_feature_report(
+                rows,
+                src_volume=getattr(plan, "src_volume", None),
+                body_volume=float(body.Shape.Volume),
+                corrected_volume=None if corr_feat is None
+                else float(corr_feat.Shape.Volume),
+                unattributed=unattr, name=report_name):
+            App.Console.PrintMessage(f"[meshtofeatures] {ln}\n")
+    except Exception as exc:                               # noqa: BLE001
+        App.Console.PrintWarning(
+            f"[meshtofeatures] feature report unavailable: {exc}\n")
     return body
