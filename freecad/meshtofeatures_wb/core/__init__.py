@@ -29,7 +29,7 @@ from .solidify import (CorrectionOp, add_corrections, apply_corrections,
 from .status import (ExecutionLedger, FeatureRow, attribute_corrections,
                      feature_report, format_feature_report)
 
-__version__ = "0.18.0"
+__version__ = "0.19.0"
 __all__ = [
     "Plane", "Sphere", "Cylinder", "Cone", "Primitive",
     "FitResult", "fit_plane", "fit_sphere", "fit_cylinder", "fit_cone", "fit_best",

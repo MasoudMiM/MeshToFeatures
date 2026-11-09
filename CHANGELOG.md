@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.19.0 — 2026-11-08
+
+Phase 3 (the trust report) is complete: every rebuild now ends with a
+per-feature deviation table, so what the feature tree rebuilt, what it
+could not represent, and where the correction pass steps in are all
+visible in the Report view.
+
+### Added
+
+- **Per-feature deviation report.** Every *Rebuild as PartDesign body*
+  ends with a FEATURE REPORT table in the Report view: one line per
+  planned feature with its executor status (`rebuilt`, `rebuilt (after
+  retry)`, `deferred -> rebuilt at chain end`, `geometric blend`,
+  `SKIPPED` -- never a silent absence), the deviation components
+  attributed to it in mm3 (exactly what the terminal correction pass
+  absorbs; freeform totals reported separately), then the
+  unplanned/undressable detections with reasons and the
+  body/corrected-vs-source volume ratios. Backed by a new pure module
+  `core/status.py` (execution ledger, correction-to-feature
+  attribution, table builder -- no new pipeline math). 14 new headless
+  tests in `test_deviation_report.py` and two feature-report smoke
+  checks.
+
+### Fixed
+
+- `build_body` rebound its own `name` parameter in the hole-property
+  loop and the cone/sphere/torus branches; anything reading the body
+  name after those loops (the report header among them) got the last
+  property key, e.g. "HoleCutDepth", instead of the body name.
+
+### Verification
+
+- Headless suite: 594 passed, 1 xfailed (Python 3.10/3.11/3.12).
+- FreeCAD 1.1.4 smoke test: 119 checks green, two of them the
+  row-per-feature report invariant.
+- Manual GUI check on the corpus plate: the table's rows matched the
+  seven correction components exactly and the corrected Part landed
+  at 100.00% of source volume.
+
 ## 0.18.0 — 2026-10-30
 
 Phase 2 (feature depth) is complete: three new rebuilt feature types —
