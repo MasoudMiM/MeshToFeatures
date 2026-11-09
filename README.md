@@ -3,7 +3,7 @@
 **A FreeCAD workbench that reverse-engineers STL meshes of prismatic parts
 into editable PartDesign bodies.**
 
-> **Status: 0.18.x.** The pipeline is well tested on machined-style
+> **Status: 0.19.x.** The pipeline is well tested on machined-style
 > prismatic parts — see the limitations section for what it does not
 > attempt. Bug reports with the offending STL attached are very welcome.
 
