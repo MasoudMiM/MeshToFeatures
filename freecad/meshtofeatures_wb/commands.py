@@ -160,6 +160,7 @@ class RebuildBody(_BaseCommand):
                 feats = detect_features(report, patches)
                 plan = plan_history(report, feats, detect_patterns(feats),
                                     patches)
+                plan.src_volume = float(tm.volume)  # feature-report ratio denom
                 try:
                     from .core.solidify import add_corrections
                     add_corrections(plan, tm)

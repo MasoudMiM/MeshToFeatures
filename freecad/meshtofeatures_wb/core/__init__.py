@@ -26,6 +26,8 @@ from .segmentation import (adaptive_angle_threshold, face_curvature,
 from .solidify import (CorrectionOp, add_corrections, apply_corrections,
                        boolean_engine_available, plan_corrections,
                        plan_to_mesh)
+from .status import (ExecutionLedger, FeatureRow, attribute_corrections,
+                     feature_report, format_feature_report)
 
 __version__ = "0.18.0"
 __all__ = [
@@ -47,4 +49,6 @@ __all__ = [
     "split_by_planes", "split_by_channels",
     "CorrectionOp", "boolean_engine_available", "plan_to_mesh",
     "plan_corrections", "apply_corrections", "add_corrections",
+    "ExecutionLedger", "FeatureRow", "attribute_corrections",
+    "feature_report", "format_feature_report",
 ]

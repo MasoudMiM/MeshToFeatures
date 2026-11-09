@@ -716,9 +716,41 @@ v0.15.6 (lateral pads):
      `apply_corrections` pre-fuses the patches into ONE boolean so the
      big solid is re-quantized once, not once per patch (bracket:
      0.9953 → 0.9995 of the source volume). The safety net is the
-     volume gate in `_shape_from_mesh`: Part volume vs trimesh volume,
-     loud warning above 1% drift — a silent wrong-volume Compound is
-     exactly what the gate exists to make audible.
+      volume gate in `_shape_from_mesh`: Part volume vs trimesh volume,
+      loud warning above 1% drift — a silent wrong-volume Compound is
+      exactly what the gate exists to make audible.
+
+  53. **The trust numbers become a table: the per-feature deviation
+      report** (phase 3). Every number the pipeline already computes was
+      scattered — the correction components (note 44-style OVER/UNDER
+      volumes), the executor's loud retry/defer/skip lines, the volume
+      gate, `unplanned`/`undressable` — and none of it reached the user
+      as ONE view. `core.status` composes them: the executor reports
+      terminal outcomes into an `ExecutionLedger` keyed by (category,
+      planned-index) — deferred, recovered, skipped, geometric dress,
+      pocket fallback — with severity-ranked merge so a later success
+      can never hide a failure (skipped > deferred > recovered/fallback
+      > rebuilt); `feature_report` emits exactly one
+      :class:`core.status.FeatureRow` per planned op (never a silent
+      partial table), appends the unplanned/undressable entries, and
+      attributes each `plan_corrections` component by centroid distance
+      to the nearest op's site set (10% of the part diagonal as the
+      freeform gate — a patch farther than that from every feature is
+      freeform transition, not the feature's fault). Sign convention:
+      `+` mm3 = the rebuild LACKS material there (UNDER), `-` =
+      OVERSHOOT. Attribution, not new math: no new fitting, sampling or
+      surface-distance measurement — the components are the already-
+      computed two-way deviation. `build_body` prints the table to the
+      Report view and attaches it to `plan.feature_report` so the smoke
+      test (and bug reports) can assert row-per-feature mechanically.
+      Sub-cut events (a deferred hole's countersink cone is the field
+      case) use their OWN ledger keys (`counterbore`/`countersink`, rolled
+      up into the hole row's DETAIL): a `skipped` sub-cut must never
+      overwrite the parent's `deferred` status, because the parent's
+      chain-end recovery is recorded after the cone's failure and the
+      severity merge would then silence the truth (review finding: the
+      merge is "worst outcome per KEY", so the key is the unit of the
+      claim — keep sub-feature events on sub-feature keys).
 
 ## Run tests
 

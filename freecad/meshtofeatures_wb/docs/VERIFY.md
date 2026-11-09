@@ -95,7 +95,20 @@ as PartDesign body" on a part with horizontal rounded edges should show
 Fillet features at the end of the tree; report any "no body edge
 matched" warnings with the part.
 
-## 6. Known limitations (do not report as bugs)
+## 6. Per-feature deviation report (v0.19)
+
+After any **Rebuild as PartDesign body**, the Report view ends with a
+FEATURE REPORT table: one line for every planned feature — its executor
+status (`rebuilt`, `deferred -> rebuilt at chain end`, `rebuilt (after
+retry)`, `SKIPPED - not in the part`, ...) and the deviation the terminal
+correction pass carries next to it (mm3, `+` = the rebuild lacks material,
+`-` = it overshoots), followed by the unplanned/undressable detections and
+the overall volume ratios (parametric body and corrected, vs the source
+mesh). Check: the table lists every feature you can see in the body tree;
+a feature the executor had to skip says so LOUDLY in the table — never a
+silent absence. The smoke test asserts the row-per-feature invariant.
+
+## 7. Known limitations (do not report as bugs)
 
 The rebuild emits an editable PartDesign Body (a real solid with history),
 not just surface patches. The remaining limitations are documented in the

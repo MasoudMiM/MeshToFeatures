@@ -76,6 +76,11 @@ Recognized and rebuilt on the current release:
 - **Diagnostics**: `freecad/meshtofeatures_wb/scripts/probe_bore_placement.py` runs the full
   pipeline headlessly inside FreeCAD's Python console and prints
   quantitative per-feature checks (useful when reporting bugs).
+- **Per-feature deviation report**: every rebuild ends (Report view) with
+  a FEATURE REPORT table — one line per planned feature with its status
+  (rebuilt / deferred / retried / geometrically dressed / SKIPPED) and the
+  correction volume measured next to it, plus the overall body/corrected
+  volume ratios. Nothing is silently missing from the rebuilt part.
 
 ## Limitations (please read before filing bugs)
 
@@ -169,8 +174,9 @@ modules for the whole session).
      for comparing against the snapped result.
    - **MeshToFeatures panel…** — task panel with options and progress.
 4. Watch the **Report view** (View → Panels → Report view): it lists
-   every recognized pattern/feature, every snap decision, and any
-   feature the executor had to retry or skip.
+   every recognized pattern/feature, every snap decision, and — at the
+   end of a rebuild — the per-feature deviation report (status + measured
+   deviation for every planned feature, and the overall volume ratios).
 
 ## Project layout
 
